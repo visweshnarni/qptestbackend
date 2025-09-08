@@ -1,3 +1,5 @@
+// src/server.js
+
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
@@ -5,49 +7,59 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Import database connection function
 import connectDB from './src/config/db.js';
+
+// Import all the modular routes
 import authRoutes from './src/routes/authRoutes.js';
-import userRoutes from './src/routes/userRoutes.js';
-import gscRoutes from './src/routes/gscRoutes.js';
-import nocRoutes from './src/routes/nocRoutes.js';
-import paymentRoutes from './src/routes/paymentRoutes.js';
-// For __dirname replacement in ESM
+import studentRoutes from './src/routes/studentRoutes.js';
+import employeeRoutes from './src/routes/employeeRoutes.js';
+import adminRoutes from './src/routes/adminRoutes.js';
+import outpassRoutes from './src/routes/outpassRoutes.js';
+
+// ESM-equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Load environment variables from .env file
 dotenv.config();
 
+// Create the Express app instance
 const app = express();
 
+// Middleware setup
+// Enable CORS for all origins
 app.use(cors());
+// Parse incoming JSON payloads
 app.use(express.json());
+// Parse cookies attached to the client request
 app.use(cookieParser());
 
-// Static folder
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Routes
+// Mount the routes to their respective API endpoints
 app.use('/api/auth', authRoutes);
+app.use('/api/student', studentRoutes);
+app.use('/api/employee', employeeRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/outpass', outpassRoutes);
 
-app.use('/api/users', userRoutes);
-app.use('/api/certificates', gscRoutes);
-app.use('/api/certificates', nocRoutes);
-app.use('/api/payment', paymentRoutes);
+// A simple root route to confirm the API is running
+app.get('/', (req, res) => res.send('🎉 QuickPass API is Running!'));
 
-
-app.get('/', (req, res) => res.send('🎉 Telangana Dental Council API is Running..........!!!!'));
-
-// Start server
+// Set the port from environment variables or default to 5000
 const PORT = process.env.PORT || 5000;
 
-
+// Function to connect to the database and then start the server
 const startServer = async () => {
-  await connectDB(); // Ensure DB is connected before starting server
-
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    
-  });
+  try {
+    await connectDB();
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error(`Failed to connect to the database: ${err.message}`);
+    process.exit(1);
+  }
 };
 
+// Start the server
 startServer();
