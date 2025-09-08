@@ -4,11 +4,9 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "seed:categories": "node seeders/seedRegistrationCategories.js",
-    "seed:nationalities": "node seeders/seedNationalities.js",
-    "seed:all": "node seeders/seedRegistrationCategories.js && node seeders/seedNationalities.js",
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "seed:admin": "node seeders/seed.js"
   },
   "keywords": [],
   "author": "",
