@@ -1,7 +1,4 @@
-// src/models/Employee.js
-
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
 
 const employeeSchema = mongoose.Schema(
   {
@@ -16,7 +13,7 @@ const employeeSchema = mongoose.Schema(
     },
     password: {
       type: String,
-      required: true,
+      required: true, // stored as plain text
     },
     employeeId: {
       type: String,
@@ -42,14 +39,7 @@ const employeeSchema = mongoose.Schema(
   }
 );
 
-// Middleware to hash the password before saving
-employeeSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) {
-    next();
-  }
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-});
+// ❌ Removed bcrypt pre-save hook (plain text only)
 
 const Employee = mongoose.model('Employee', employeeSchema);
 

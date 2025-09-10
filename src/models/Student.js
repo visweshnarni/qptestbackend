@@ -1,7 +1,4 @@
-// src/models/Student.js
-
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
 
 const studentSchema = mongoose.Schema(
   {
@@ -16,7 +13,7 @@ const studentSchema = mongoose.Schema(
     },
     password: {
       type: String,
-      required: true,
+      required: true, // stored as plain text
     },
     rollNumber: {
       type: String,
@@ -54,14 +51,7 @@ const studentSchema = mongoose.Schema(
   }
 );
 
-// Middleware to hash the password before saving
-studentSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) {
-    next();
-  }
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-});
+// ❌ Removed bcrypt middleware (plain text password only)
 
 const Student = mongoose.model('Student', studentSchema);
 

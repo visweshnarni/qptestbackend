@@ -1,8 +1,4 @@
-// src/controllers/authController.js
-
 import asyncHandler from 'express-async-handler';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import Admin from '../models/Admin.js';
 import Student from '../models/Student.js';
 import Employee from '../models/Employee.js';
@@ -23,15 +19,11 @@ export const registerStudent = asyncHandler(async (req, res) => {
     throw new Error('Student with this email or roll number already exists');
   }
 
-  // 2. Hash password.
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(password, salt);
-
-  // 3. Create new student record.
+  // 2. Create new student record (no bcrypt).
   const student = await Student.create({
     name,
     email,
-    password: hashedPassword,
+    password,
     rollNumber,
     department,
     year,
@@ -41,7 +33,6 @@ export const registerStudent = asyncHandler(async (req, res) => {
   });
 
   if (student) {
-    // 4. Respond with success message.
     res.status(201).json({
       _id: student._id,
       name: student.name,
@@ -70,15 +61,11 @@ export const registerEmployee = asyncHandler(async (req, res) => {
     throw new Error('Employee with this email or employee ID already exists');
   }
 
-  // 2. Hash password.
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(password, salt);
-
-  // 3. Create new employee record.
+  // 2. Create new employee record (no bcrypt).
   const employee = await Employee.create({
     name,
     email,
-    password: hashedPassword,
+    password,
     employeeId,
     department,
     phone,
@@ -86,7 +73,6 @@ export const registerEmployee = asyncHandler(async (req, res) => {
   });
 
   if (employee) {
-    // 4. Respond with success message.
     res.status(201).json({
       _id: employee._id,
       name: employee.name,
@@ -112,25 +98,25 @@ export const loginUser = asyncHandler(async (req, res) => {
 
   // 1. Find the user by email in Admin, Student, or Employee models.
   user = await Admin.findOne({ email });
-  if (!user) {
-    user = await Student.findOne({ email });
-  }
-  if (!user) {
-    user = await Employee.findOne({ email });
-  }
+  if (!user) user = await Student.findOne({ email });
+  if (!user) user = await Employee.findOne({ email });
 
-  // If no user is found, send a 401 unauthorized error.
   if (!user) {
     res.status(401);
     throw new Error('Invalid email or password');
   }
 
-  // 2. Compare the provided password with the hashed password.
-  const isMatch = await bcrypt.compare(password, user.password);
+  console.log("🔍 User found in DB:", {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+  });
+  // console.log("Entered password:", password);
+  // console.log("Stored password in DB:", user.password);
 
-  // If the passwords match, generate a JWT token.
-  if (isMatch) {
-    // 3. Generate a JWT token and send it in the response.
+  // 2. Direct password check (no bcrypt).
+  if (password === user.password) {
     res.status(200).json({
       _id: user._id,
       name: user.name,
@@ -139,7 +125,6 @@ export const loginUser = asyncHandler(async (req, res) => {
       token: generateToken(user._id, user.role),
     });
   } else {
-    // 4. If no match, send an error.
     res.status(401);
     throw new Error('Invalid email or password');
   }

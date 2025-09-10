@@ -29,7 +29,7 @@ router.get('/pending', protect, authorize('faculty', 'hod', 'mentor', 'protocol_
 // @route   PUT /api/outpass/:id/faculty-approve
 // @desc    Faculty approves/rejects an outpass
 // @access  Private (Faculty)
-router.put('/:id/faculty-approve', protect, authorize('faculty'), facultyApprove);
+router.put('/:id/faculty-approve', protect, authorize('faculty','mentor'), facultyApprove);
 
 // @route   PUT /api/outpass/:id/hod-approve
 // @desc    HOD approves/rejects an outpass
