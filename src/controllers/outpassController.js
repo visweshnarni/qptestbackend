@@ -63,7 +63,8 @@ export const getPendingOutpasses = asyncHandler(async (req, res) => {
     pendingOutpasses = await Outpass.find({
       status: 'pending_faculty',
     })
-      .populate('studentId', 'name rollNumber department'); // Populate to filter by department
+      // CORRECTED: Added 'parentPhone' and 'parentName' to the populate query
+      .populate('studentId', 'name rollNumber department parentPhone parentName');
 
     // Filter by department on the server-side to ensure security
     const filteredOutpasses = pendingOutpasses.filter(
@@ -76,7 +77,8 @@ export const getPendingOutpasses = asyncHandler(async (req, res) => {
       status: 'pending_hod',
       'facultyApproval.status': 'approved',
     })
-      .populate('studentId', 'name rollNumber department');
+      // CORRECTED: Added 'parentPhone' and 'parentName' to the populate query
+      .populate('studentId', 'name rollNumber department parentPhone parentName');
 
     // Filter by department on the server-side
     const filteredOutpasses = pendingOutpasses.filter(

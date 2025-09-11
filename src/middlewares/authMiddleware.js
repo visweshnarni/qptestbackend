@@ -1,49 +1,51 @@
-// src/middlewares/authMiddleware.js
-
 import jwt from 'jsonwebtoken';
 import asyncHandler from 'express-async-handler';
-// We will import the user models to find the user.
-// These will be created in the next step.
+// You'll need to uncomment these imports if you're using them to populate req.user
 // import Admin from '../models/Admin.js';
 // import Student from '../models/Student.js';
 // import Employee from '../models/Employee.js';
 
 /**
  * @desc Middleware to protect routes and verify JWT token
- * This function checks for a token in the request header,
+ * This function checks for a token in the request header or cookies,
  * verifies it, and attaches the user object to the request.
  */
 export const protect = asyncHandler(async (req, res, next) => {
   let token;
 
-  // Check if the Authorization header exists and starts with 'Bearer'
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      // Get the token from the header
-      token = req.headers.authorization.split(' ')[1];
-
-      // Verify the token using the JWT secret from environment variables
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      // We need to fetch the user based on the decoded ID and role.
-      // This is a placeholder and will be fully implemented once models are created.
-      // For now, we'll assume the token contains the user's ID and role.
-      req.user = {
-        id: decoded.id,
-        role: decoded.role,
-      };
-
-      // Continue to the next middleware or route handler
-      next();
-    } catch (error) {
-      console.error(error);
-      res.status(401).json({ message: 'Not authorized, token failed' });
-    }
+  // 1. Check for the token in the request cookies (most common for web apps)
+  if (req.cookies && req.cookies.token) {
+    token = req.cookies.token;
+  }
+  // 2. Fallback to the Authorization header (good for API clients like Postman)
+  else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
   }
 
-  // If no token is found in the header
+  // If no token is found from either source
   if (!token) {
-    res.status(401).json({ message: 'Not authorized, no token' });
+    res.status(401);
+    throw new Error('Not authorized, no token');
+  }
+
+  try {
+    // Verify the token using the JWT secret from environment variables
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // We need to fetch the user based on the decoded ID and role.
+    // This is a placeholder and will be fully implemented once models are created.
+    // For now, we'll assume the token contains the user's ID and role.
+    req.user = {
+      id: decoded.id,
+      role: decoded.role,
+    };
+
+    // Continue to the next middleware or route handler
+    next();
+  } catch (error) {
+    console.error(error);
+    res.status(401);
+    throw new Error('Not authorized, token failed');
   }
 });
 

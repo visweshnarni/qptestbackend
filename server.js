@@ -1,4 +1,4 @@
-// src/server.js
+// server.js
 
 import express from 'express';
 import dotenv from 'dotenv';
@@ -27,15 +27,25 @@ dotenv.config();
 // Create the Express app instance
 const app = express();
 
+// --------------------
 // Middleware setup
-// Enable CORS for all origins
-app.use(cors());
+// --------------------
+
+// Enable CORS only for your frontend
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:3000', // Next.js frontend
+  credentials: true, // allow cookies and auth headers
+}));
+
 // Parse incoming JSON payloads
 app.use(express.json());
+
 // Parse cookies attached to the client request
 app.use(cookieParser());
 
-// Mount the routes to their respective API endpoints
+// --------------------
+// API Routes
+// --------------------
 app.use('/api/auth', authRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/employee', employeeRoutes);
@@ -45,21 +55,21 @@ app.use('/api/outpass', outpassRoutes);
 // A simple root route to confirm the API is running
 app.get('/', (req, res) => res.send('🎉 QuickPass API is Running!'));
 
-// Set the port from environment variables or default to 5000
+// --------------------
+// Start server
+// --------------------
 const PORT = process.env.PORT || 5000;
 
-// Function to connect to the database and then start the server
 const startServer = async () => {
   try {
     await connectDB();
     app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`✅ Server running on http://localhost:${PORT}`);
     });
   } catch (err) {
-    console.error(`Failed to connect to the database: ${err.message}`);
+    console.error(`❌ Failed to connect to the database: ${err.message}`);
     process.exit(1);
   }
 };
 
-// Start the server
 startServer();

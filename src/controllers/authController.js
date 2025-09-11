@@ -117,13 +117,36 @@ export const loginUser = asyncHandler(async (req, res) => {
 
   // 2. Direct password check (no bcrypt).
   if (password === user.password) {
-    res.status(200).json({
+    // 3. Generate a JWT token and send it in the response.
+    let responseData = {
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
       token: generateToken(user._id, user.role),
-    });
+    };
+
+    // Add specific fields based on user role
+    if (user.role === 'student') {
+      responseData = {
+        ...responseData,
+        rollNumber: user.rollNumber,
+        department: user.department,
+        year: user.year,
+        phone: user.phone,
+        parentName: user.parentName,
+        parentPhone: user.parentPhone,
+      };
+    } else if (user.role === 'employee' || user.role === 'hod' || user.role === 'mentor' || user.role === 'protocol_officer') {
+      responseData = {
+        ...responseData,
+        employeeId: user.employeeId,
+        department: user.department,
+        phone: user.phone,
+      };
+    }
+
+    res.status(200).json(responseData);
   } else {
     res.status(401);
     throw new Error('Invalid email or password');
