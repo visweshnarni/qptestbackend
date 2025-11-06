@@ -88,3 +88,39 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
     recentActivity: recentActivity,         // Send the array of recent passes
   });
 });
+
+/**
+ * @desc    Get student details for the outpass application form
+ * @route   GET /api/student/apply-details
+ * @access  Private (Student)
+ */
+export const getStudentApplyDetails = asyncHandler(async (req, res) => {
+  // req.user is attached by the 'protect' middleware
+  const student = await Student.findById(req.user.id)
+    .select('name rollNumber primaryParentPhone secondaryParentPhone class') // Added secondaryParentPhone
+    .populate({
+      path: 'class',
+      select: 'name department',
+      populate: {
+        path: 'department',
+        select: 'name',
+      },
+    });
+
+  if (!student) {
+    res.status(404);
+    throw new Error('Student not found');
+  }
+
+  // Flatten the data to match the frontend screenshot
+  const applyDetails = {
+    name: student.name,
+    collegeId: student.rollNumber,
+    class: student.class.name,
+    department: student.class.department.name,
+    primaryParentContact: student.primaryParentPhone,
+    alternateParentContact: student.secondaryParentPhone || null, // Added this field
+  };
+
+  res.status(200).json(applyDetails);
+});

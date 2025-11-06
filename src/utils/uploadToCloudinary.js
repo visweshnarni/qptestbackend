@@ -1,10 +1,13 @@
-// utils/uploadToCloudinary.js
+// src/utils/cloudinaryUpload.js
+
 import { v2 as cloudinary } from 'cloudinary';
 import dotenv from 'dotenv';
+import multer from 'multer';
 import streamifier from 'streamifier';
 
 dotenv.config();
 
+// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -12,26 +15,42 @@ cloudinary.config({
 });
 
 /**
- * Upload PDF buffer to Cloudinary inside tdc/fullName/
- * @param {Buffer} buffer - PDF buffer
- * @param {string} filename - e.g. "16893728499-pan_upload.pdf"
- * @param {string} fullName - Folder like "John_A_Doe"
+ * @desc Uploads a buffer to Cloudinary
+ * @param {Buffer} buffer - The file buffer
+ * @param {string} studentName - The student's name, used for folder
+ * @param {string} originalFilename - The original name of the file
  */
-export const uploadBufferToCloudinary = async (buffer, filename, fullName) => {
+const uploadBufferToCloudinary = (buffer, studentName, originalFilename) => {
   return new Promise((resolve, reject) => {
-    const publicId = `tdc/${fullName}/${filename.replace('.pdf', '')}`;
+    // Sanitize student name for folder
+    const folderName = studentName.replace(/[^a-zA-Z0-9]/g, '_');
+    // Create a unique public_id
+    const publicId = `qp/${folderName}/${Date.now()}_${originalFilename}`;
+
     const uploadStream = cloudinary.uploader.upload_stream(
       {
-        resource_type: 'raw',        // ensure it's treated as raw (PDF)
-        public_id: publicId,         // ensures folder structure
-        format: 'pdf'               // set correct format
+        public_id: publicId,
+        resource_type: 'auto', // Detect file type automatically (image, pdf, etc.)
       },
       (error, result) => {
-        if (error) return reject(error);
-        return resolve(result.secure_url);
+        if (error) {
+          console.error('Cloudinary Upload Error:', error);
+          return reject(error);
+        }
+        resolve(result.secure_url); // Return the secure URL
       }
     );
 
+    // Use streamifier to pipe the buffer to the upload stream
     streamifier.createReadStream(buffer).pipe(uploadStream);
   });
 };
+
+/**
+ * @desc Multer middleware to handle single file upload in memory
+ */
+// Use multer.memoryStorage() to keep the file in memory as a buffer
+const storage = multer.memoryStorage();
+export const upload = multer({ storage: storage });
+
+export default uploadBufferToCloudinary;
