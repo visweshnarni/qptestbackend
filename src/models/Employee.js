@@ -1,3 +1,4 @@
+// models/Employee.js
 import mongoose from 'mongoose';
 
 const employeeSchema = mongoose.Schema(
@@ -13,34 +14,32 @@ const employeeSchema = mongoose.Schema(
     },
     password: {
       type: String,
-      required: true, // stored as plain text
+      required: true, // 🚨 DANGER: Store hashed passwords, not plain text!
     },
     employeeId: {
       type: String,
       required: true,
       unique: true,
     },
-    department: {
-      type: String,
-      required: true,
-    },
     phone: {
       type: String,
+      required: true, // Needed for Twilio
+    },
+    // Links to the Department model
+    department: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department',
       required: true,
     },
+    // Defines what this employee can do
     role: {
       type: String,
-      enum: ['faculty', 'hod', 'mentor', 'protocol_officer'],
+      enum: ['faculty', 'hod', 'security'],
       required: true,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-// ❌ Removed bcrypt pre-save hook (plain text only)
-
 const Employee = mongoose.model('Employee', employeeSchema);
-
 export default Employee;

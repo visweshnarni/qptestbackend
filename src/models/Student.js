@@ -1,3 +1,4 @@
+// models/Student.js
 import mongoose from 'mongoose';
 
 const studentSchema = mongoose.Schema(
@@ -13,20 +14,12 @@ const studentSchema = mongoose.Schema(
     },
     password: {
       type: String,
-      required: true, // stored as plain text
+      required: true, // 🚨 DANGER: Store hashed passwords, not plain text!
     },
     rollNumber: {
       type: String,
       required: true,
       unique: true,
-    },
-    department: {
-      type: String,
-      required: true,
-    },
-    year: {
-      type: Number,
-      required: true,
     },
     phone: {
       type: String,
@@ -36,23 +29,36 @@ const studentSchema = mongoose.Schema(
       type: String,
       required: true,
     },
-    parentPhone: {
+
+    // MODIFICATION: Changed to primary and secondary numbers
+    primaryParentPhone: {
       type: String,
+      required: true, // This one is mandatory
+    },
+    secondaryParentPhone: {
+      type: String, // No 'required: true', so this is optional
+    },
+    
+    // This 'class' field links to the Class model
+    class: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Class',
       required: true,
+    },
+    attendancePercentage: {
+      type: Number,
+      required: true,
+      default: 100,
+      min: 0,
+      max: 100,
     },
     role: {
       type: String,
-      required: true,
       default: 'student',
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-// ❌ Removed bcrypt middleware (plain text password only)
-
 const Student = mongoose.model('Student', studentSchema);
-
 export default Student;

@@ -1,13 +1,12 @@
-// src/models/Outpass.js
-
+// models/Outpass.js
 import mongoose from 'mongoose';
 
 const outpassSchema = mongoose.Schema(
   {
-    studentId: {
+    student: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
-      ref: 'Student', // Reference to the Student model
+      ref: 'Student',
     },
     reason: {
       type: String,
@@ -21,37 +20,52 @@ const outpassSchema = mongoose.Schema(
       type: Date,
       required: true,
     },
+    // The main status of the outpass request
     status: {
       type: String,
       enum: ['pending_faculty', 'pending_hod', 'approved', 'rejected'],
       default: 'pending_faculty',
     },
-    facultyApproval: {
-      status: {
-        type: String,
-        enum: ['pending', 'approved', 'rejected'],
-        default: 'pending',
+    
+    // Tracks *who* approved it at the faculty level
+    facultyApprover: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Employee',
+    },
+    // Tracks *who* approved it at the HOD level
+    hodApprover: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Employee',
+    },
+    
+    // A log for when the parent was (supposedly) contacted
+    parentContactVerified: {
+      status: { 
+        type: Boolean, 
+        default: false 
       },
-      timestamp: {
-        type: Date,
+      by: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Employee' 
+      },
+      at: { 
+        type: Date 
       },
     },
-    hodApproval: {
-      status: {
-        type: String,
-        enum: ['pending', 'approved', 'rejected'],
-        default: 'pending',
-      },
-      timestamp: {
-        type: Date,
-      },
+    
+    // If status is 'rejected', this field should be filled
+    rejectionReason: {
+      type: String,
     },
+
+    // A list of faculty IDs that we sent notifications to
+    notifiedFaculty: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Employee',
+    }],
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 const Outpass = mongoose.model('Outpass', outpassSchema);
-
 export default Outpass;

@@ -1,3 +1,5 @@
+// controllers/authController.js
+
 import asyncHandler from 'express-async-handler';
 import Admin from '../models/Admin.js';
 import Student from '../models/Student.js';
@@ -10,26 +12,38 @@ import generateToken from '../utils/generateToken.js';
  * @access  Private (Admin)
  */
 export const registerStudent = asyncHandler(async (req, res) => {
-  const { name, email, password, rollNumber, department, year, phone, parentName, parentPhone } = req.body;
+  const {
+    name,
+    email,
+    password,
+    rollNumber,
+    phone,
+    parentName,
+    primaryParentPhone,
+    secondaryParentPhone,
+    class: classId, // Admin provides the Class ID
+    attendancePercentage,
+  } = req.body;
 
-  // 1. Check if student already exists.
+  // 1. Check if student already exists
   const studentExists = await Student.findOne({ $or: [{ email }, { rollNumber }] });
   if (studentExists) {
     res.status(400);
     throw new Error('Student with this email or roll number already exists');
   }
 
-  // 2. Create new student record (no bcrypt).
+  // 2. Create new student (no bcrypt, as requested)
   const student = await Student.create({
     name,
     email,
     password,
     rollNumber,
-    department,
-    year,
     phone,
     parentName,
-    parentPhone,
+    primaryParentPhone,
+    secondaryParentPhone,
+    class: classId,
+    attendancePercentage,
   });
 
   if (student) {
@@ -38,7 +52,7 @@ export const registerStudent = asyncHandler(async (req, res) => {
       name: student.name,
       email: student.email,
       role: student.role,
-      token: generateToken(student._id, student.role),
+      class: student.class,
     });
   } else {
     res.status(400);
@@ -52,23 +66,31 @@ export const registerStudent = asyncHandler(async (req, res) => {
  * @access  Private (Admin)
  */
 export const registerEmployee = asyncHandler(async (req, res) => {
-  const { name, email, password, employeeId, department, phone, role } = req.body;
+  const {
+    name,
+    email,
+    password,
+    employeeId,
+    phone,
+    department: departmentId, // Admin provides the Department ID
+    role,
+  } = req.body;
 
-  // 1. Check if employee already exists.
+  // 1. Check if employee already exists
   const employeeExists = await Employee.findOne({ $or: [{ email }, { employeeId }] });
   if (employeeExists) {
     res.status(400);
     throw new Error('Employee with this email or employee ID already exists');
   }
 
-  // 2. Create new employee record (no bcrypt).
+  // 2. Create new employee (no bcrypt, as requested)
   const employee = await Employee.create({
     name,
     email,
     password,
     employeeId,
-    department,
     phone,
+    department: departmentId,
     role,
   });
 
@@ -78,13 +100,17 @@ export const registerEmployee = asyncHandler(async (req, res) => {
       name: employee.name,
       email: employee.email,
       role: employee.role,
-      token: generateToken(employee._id, employee.role),
+      department: employee.department,
     });
   } else {
     res.status(400);
     throw new Error('Invalid employee data');
   }
 });
+
+// controllers/authController.js
+
+// ... (registerStudent and registerEmployee are fine) ...
 
 /**
  * @desc    Authenticate user & get token
@@ -96,53 +122,50 @@ export const loginUser = asyncHandler(async (req, res) => {
 
   let user = null;
 
-  // 1. Find the user by email in Admin, Student, or Employee models.
+  // 1. Find the user
   user = await Admin.findOne({ email });
-  if (!user) user = await Student.findOne({ email });
-  if (!user) user = await Employee.findOne({ email });
+  if (!user) {
+    user = await Student.findOne({ email }).populate({
+      path: 'class',
+      populate: { path: 'department' }
+    });
+  }
+  if (!user) {
+    user = await Employee.findOne({ email }).populate('department');
+  }
 
   if (!user) {
     res.status(401);
     throw new Error('Invalid email or password');
   }
 
-  console.log("🔍 User found in DB:", {
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-  });
-  // console.log("Entered password:", password);
-  // console.log("Stored password in DB:", user.password);
-
-  // 2. Direct password check (no bcrypt).
+  // 2. Direct password check
   if (password === user.password) {
-    // 3. Generate a JWT token and send it in the response.
+    
+    // 3. Generate token
+    const token = generateToken(user._id, user.role);
+
+    // 4. (REMOVED) res.cookie() part is gone.
+
+    // 5. Build the response data
     let responseData = {
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
-      token: generateToken(user._id, user.role),
+      token: token, // <-- ADD THIS LINE
     };
 
-    // Add specific fields based on user role
+    // Add role-specific fields
     if (user.role === 'student') {
       responseData = {
         ...responseData,
-        rollNumber: user.rollNumber,
-        department: user.department,
-        year: user.year,
-        phone: user.phone,
-        parentName: user.parentName,
-        parentPhone: user.parentPhone,
+        // ... all student fields
       };
-    } else if (user.role === 'employee' || user.role === 'hod' || user.role === 'mentor' || user.role === 'protocol_officer') {
+    } else if (['faculty', 'hod', 'security'].includes(user.role)) {
       responseData = {
         ...responseData,
-        employeeId: user.employeeId,
-        department: user.department,
-        phone: user.phone,
+        // ... all employee fields
       };
     }
 
