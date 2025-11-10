@@ -139,3 +139,131 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
     urgentAlerts: formattedUrgentAlerts,
   });
 });
+
+
+/* --------------------------------------------
+   GET HOD PENDING APPROVALS
+   -------------------------------------------- */
+/**
+ * @desc Get all outpass requests awaiting HOD approval
+ * @route GET /api/hod/pending-approvals
+ * @query ?category=Emergency|Medical|Academic etc.
+ * @access Private (HOD)
+ */
+export const getPendingHodApprovals = asyncHandler(async (req, res) => {
+  const hodId = req.user.id;
+  const { category } = req.query; // ?category=Emergency
+
+  // 1️⃣ Validate HOD
+  const hod = await Employee.findById(hodId).populate('department', 'name').lean();
+  if (!hod) throw new Error('HOD not found');
+
+  // 2️⃣ Fetch all classes in HOD’s department
+  const deptClasses = await Class.find({ department: hod.department._id }).select('_id');
+  const classIds = deptClasses.map(c => c._id);
+
+  // 3️⃣ Build query
+  const query = { status: 'pending_hod' };
+  query['student'] = { $exists: true };
+
+  if (category) {
+    query.reasonCategory = { $regex: new RegExp(`^${category}$`, 'i') };
+  }
+
+  // 4️⃣ Fetch outpasses under this department
+  const outpasses = await Outpass.find(query)
+    .populate({
+      path: 'student',
+      match: { class: { $in: classIds } },
+      select: 'name rollNumber attendancePercentage class',
+      populate: {
+        path: 'class',
+        select: 'name department',
+        populate: { path: 'department', select: 'name' },
+      },
+    })
+    .populate('facultyApprover', 'name email')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  // Filter outpasses belonging to other departments
+  const deptOutpasses = outpasses.filter(o => o.student);
+
+  if (category && deptOutpasses.length === 0) {
+    return res.status(404).json({ message: `No pending outpasses found for category "${category}"` });
+  }
+
+  // 5️⃣ Format list
+  const formattedList = deptOutpasses.map(o => ({
+    requestId: o._id,
+    studentName: o.student?.name,
+    rollNumber: o.student?.rollNumber,
+    class: o.student?.class?.name,
+    department: o.student?.class?.department?.name,
+    facultyApprovedBy: o.facultyApprover?.name || 'N/A',
+    facultyApprovedAt: o.updatedAt ? moment(o.updatedAt).tz('Asia/Kolkata').fromNow() : null,
+    attendanceAtApply: o.attendanceAtApply,
+    attendanceStatus: o.attendanceAtApply < 75 ? 'Low Attendance' : 'Normal',
+    reasonCategory: o.reasonCategory,
+    reason: o.reason,
+    exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
+    returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('h:mm A'),
+    requestedAgo: moment(o.createdAt).tz('Asia/Kolkata').fromNow(),
+    timeInHodQueue: moment(o.updatedAt || o.createdAt).tz('Asia/Kolkata').fromNow(),
+    isEmergency: /^emergency$/i.test(o.reasonCategory),
+  }));
+
+  const totalPending = formattedList.length;
+  const urgentCount = formattedList.filter(r => r.isEmergency).length;
+
+  res.status(200).json({
+    summary: {
+      totalPending,
+      urgentCount,
+      department: hod.department.name,
+    },
+    requests: formattedList,
+  });
+});
+
+/* --------------------------------------------
+   HOD APPROVE / REJECT OUTPASS
+   -------------------------------------------- */
+/**
+ * @desc Approve or reject outpass by HOD
+ * @route PUT /api/hod/outpass/:id/action
+ * @access Private (HOD)
+ */
+export const handleHodApproval = asyncHandler(async (req, res) => {
+  const hodId = req.user.id;
+  const { id } = req.params;
+  const { action, rejectionReason } = req.body;
+
+  const outpass = await Outpass.findById(id)
+    .populate('student', 'name rollNumber')
+    .populate('facultyApprover', 'name')
+    .lean();
+
+  if (!outpass) throw new Error('Outpass not found');
+  if (outpass.status !== 'pending_hod') throw new Error('Outpass is not pending HOD approval.');
+
+  const update = { hodApprover: hodId };
+
+  if (action === 'approve') {
+    update.status = 'approved';
+  } else if (action === 'reject') {
+    update.status = 'rejected';
+    update.rejectionReason = rejectionReason || 'Rejected by HOD';
+  } else {
+    throw new Error('Invalid action. Must be "approve" or "reject".');
+  }
+
+  await Outpass.findByIdAndUpdate(id, update, { new: true });
+
+  res.status(200).json({
+    message: `Outpass ${action === 'approve' ? 'approved' : 'rejected'} successfully.`,
+    outpassId: id,
+    status: update.status,
+    hodApprover: hodId,
+  });
+});
