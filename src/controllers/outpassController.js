@@ -479,3 +479,76 @@ export const cancelOutpassByStudent = asyncHandler(async (req, res) => {
 });
 
 
+/**
+ * @desc    Get student's outpass history (excluding currently processing ones)
+ * @route   GET /api/outpass/history
+ * @access  Private (Student)
+ */
+export const getOutpassHistory = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const { status, month, year, sort } = req.query;
+
+  // 🔹 Base filter (exclude active pending)
+  const query = {
+    student: studentId,
+    status: { $nin: ['pending_faculty', 'pending_hod'] },
+  };
+
+  // 🔹 Status filtering
+  if (status && status !== "all") {
+    if (status === "cancelled") query.status = "cancelled_by_student";
+    else if (["approved", "rejected"].includes(status)) {
+      query.status = status;
+    }
+  }
+
+  // 🔹 Month/year filtering
+  if (month || year) {
+    const targetYear = year || moment().year();
+    const targetMonth = month ? parseInt(month, 10) - 1 : 0;
+    const startDate = moment.tz({ year: targetYear, month: targetMonth, day: 1 }, 'Asia/Kolkata').startOf('month').toDate();
+    const endDate = moment(startDate).endOf('month').toDate();
+    query.createdAt = { $gte: startDate, $lte: endDate };
+  }
+
+  // 🔹 Sorting
+  const sortOrder = sort === "oldest" ? 1 : -1;
+
+  const outpasses = await Outpass.find(query)
+    .sort({ createdAt: sortOrder })
+    .populate('facultyApprover', 'name')
+    .populate('hodApprover', 'name')
+    .populate('assignedMentor', 'name');
+
+  // 🔹 Count summary (excluding pending)
+  const [total, approved, rejected, cancelled] = await Promise.all([
+    Outpass.countDocuments({ student: studentId, status: { $nin: ['pending_faculty', 'pending_hod'] } }),
+    Outpass.countDocuments({ student: studentId, status: 'approved' }),
+    Outpass.countDocuments({ student: studentId, status: 'rejected' }),
+    Outpass.countDocuments({ student: studentId, status: 'cancelled_by_student' }),
+  ]);
+
+  // 🔹 Format response list
+  const list = outpasses.map(o => ({
+    requestId: o._id,
+    reasonCategory: o.reasonCategory,
+    reason: o.reason,
+    status: o.status === "cancelled_by_student" ? "cancelled" : o.status,
+    exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
+    returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('h:mm A'),
+    supportingDocumentUrl: o.supportingDocumentUrl || null,
+    requestedAt: moment(o.createdAt).tz('Asia/Kolkata').format('MMM D, YYYY, hh:mm A'),
+    lastUpdatedAt: moment(o.updatedAt).tz('Asia/Kolkata').format('MMM D, YYYY, hh:mm A'),
+  }));
+
+  res.status(200).json({
+    summary: {
+      total,
+      approved,
+      rejected,
+      cancelled,
+    },
+    count: list.length,
+    outpasses: list,
+  });
+});

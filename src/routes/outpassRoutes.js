@@ -5,7 +5,8 @@ import {
   facultyApprove,
   hodApprove,
   getCurrentOutpass,
-  cancelOutpassByStudent
+  cancelOutpassByStudent,
+  getOutpassHistory, 
 } from '../controllers/outpassController.js';
 import { protect, authorize } from '../middlewares/authMiddleware.js';
 import { upload } from '../utils/uploadToCloudinary.js';
@@ -29,5 +30,7 @@ router.get('/mine', protect, authorize('student'), getStudentOutpasses);
 router.get('/pending', protect, authorize('faculty', 'hod'), getPendingOutpasses);
 router.put('/:id/faculty-approve', protect, authorize('faculty'), facultyApprove);
 router.put('/:id/hod-approve', protect, authorize('hod'), hodApprove);
+
+router.get('/history', protect, authorize('student'), getOutpassHistory);
 
 export default router;
