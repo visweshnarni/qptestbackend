@@ -32,10 +32,15 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
   const isMentor = !!mentorClass;
 
   // --- 3️⃣ Count students ---
+  // Get all classes under this faculty’s department
+  const departmentClasses = await Class.find({ department: faculty.department._id }).select('_id');
+
+  // Count all students in that department
   const deptStudentCount = await Student.countDocuments({
-    department: faculty.department._id,
+    class: { $in: departmentClasses.map(c => c._id) },
   });
 
+  // Count students under this mentor’s class (if applicable)
   let classStudentCount = 0;
   if (isMentor) {
     classStudentCount = await Student.countDocuments({ class: mentorClass._id });
@@ -63,11 +68,13 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
   if (sort === 'myclass' && isMentor) {
     // Mentor’s class only
     const classStudents = await Student.find({ class: mentorClass._id }).select('_id');
-    query.student = { $in: classStudents.map((s) => s._id) };
+    query.student = { $in: classStudents.map(s => s._id) };
   } else {
     // Default → department-level
-    const deptStudents = await Student.find({ department: faculty.department._id }).select('_id');
-    query.student = { $in: deptStudents.map((s) => s._id) };
+    const deptStudents = await Student.find({
+      class: { $in: departmentClasses.map(c => c._id) },
+    }).select('_id');
+    query.student = { $in: deptStudents.map(s => s._id) };
   }
 
   const recentRequests = await Outpass.find(query)
@@ -75,7 +82,7 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
     .limit(5)
     .populate({
       path: 'student',
-      select: 'name rollNumber class parentName primaryParentPhone parentEmail',
+      select: 'name rollNumber parentName primaryParentPhone class',
       populate: {
         path: 'class',
         select: 'name department',
@@ -84,7 +91,7 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
     })
     .lean();
 
-  const formattedRecent = recentRequests.map((r) => ({
+  const formattedRecent = recentRequests.map(r => ({
     requestId: r._id,
     studentName: r.student?.name,
     rollNumber: r.student?.rollNumber,
@@ -95,7 +102,6 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
     alternateContact: r.alternateContact || null,
     parentName: r.student?.parentName,
     parentPhone: r.student?.primaryParentPhone,
-    parentEmail: r.student?.parentEmail,
     exitTime: moment(r.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
     returnTime: moment(r.dateTo).tz('Asia/Kolkata').format('h:mm A'),
     requestedAt: moment(r.createdAt).tz('Asia/Kolkata').fromNow(),
@@ -107,12 +113,16 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
     reasonCategory: { $regex: /^emergency$/i },
     status: { $in: ['pending_faculty', 'pending_hod'] },
   })
-    .populate('student', 'name rollNumber class')
+    .populate({
+      path: 'student',
+      select: 'name rollNumber class',
+      populate: { path: 'class', select: 'name' },
+    })
     .sort({ createdAt: -1 })
     .limit(5)
     .lean();
 
-  const urgentAlerts = urgentRequests.map((u) => ({
+  const urgentAlerts = urgentRequests.map(u => ({
     requestId: u._id,
     message: `Emergency request from ${u.student?.name} (${u.student?.rollNumber})`,
     class: u.student?.class?.name,
