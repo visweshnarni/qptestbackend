@@ -9,11 +9,12 @@ const outpassSchema = mongoose.Schema(
     },
     reasonCategory: { type: String, required: true },
     reason: { type: String, required: true },
-    dateFrom: { type: Date, required: true },
-    dateTo: { type: Date, required: true },
+    dateFrom: { type: Date, required: true }, // Expected exit time
+    dateTo: { type: Date, required: true },   // Expected return time
     alternateContact: { type: String },
     supportingDocumentUrl: { type: String },
     attendanceAtApply: { type: Number },
+
     status: {
       type: String,
       enum: [
@@ -21,15 +22,14 @@ const outpassSchema = mongoose.Schema(
         'pending_hod',
         'approved',
         'rejected',
-        'cancelled_by_student', // ✅ new
+        'cancelled_by_student',
+        'exited' // ✅ new: when verified by security
       ],
       default: 'pending_faculty',
     },
 
     facultyApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
     hodApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
-
-    // Optional: assigned mentor (or class advisor)
     assignedMentor: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
 
     parentContactVerified: {
@@ -37,8 +37,25 @@ const outpassSchema = mongoose.Schema(
       by: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
       at: { type: Date },
     },
+
     rejectionReason: { type: String },
     notifiedFaculty: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
+
+    // ✅ NEW security checkpoint fields
+    exitVerified: {
+      status: { type: Boolean, default: false },
+      by: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }, // security guard ID
+      at: { type: Date },
+    },
+    returnVerified: {
+      status: { type: Boolean, default: false },
+      by: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
+      at: { type: Date },
+    },
+
+    // ✅ Actual gate timestamps
+    actualExitTime: { type: Date },
+    actualReturnTime: { type: Date },
   },
   { timestamps: true }
 );
