@@ -13,6 +13,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "agenda": "^5.0.0",
     "axios": "^1.11.0",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.7.0",
@@ -26,10 +27,11 @@
     "moment-timezone": "^0.6.0",
     "mongoose": "^8.16.0",
     "multer": "^2.0.2",
-    "nodemailer": "^7.0.4",
+    "nodemailer": "^7.0.10",
     "nodemon": "^3.1.10",
     "streamifier": "^0.1.1",
     "stripe": "^18.3.0",
+    "twilio": "^5.10.4",
     "uuid": "^11.1.0"
   }
 }

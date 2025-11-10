@@ -10,6 +10,9 @@ import { fileURLToPath } from 'url';
 // Import database connection function
 import connectDB from './src/config/db.js';
 
+// --- NEW: Import Agenda ---
+import agenda from './src/config/agenda.js';
+
 // Import all the modular routes
 import authRoutes from './src/routes/authRoutes.js';
 import studentRoutes from './src/routes/studentRoutes.js';
@@ -30,18 +33,15 @@ const app = express();
 // --------------------
 // Middleware setup
 // --------------------
-
-// Enable CORS only for your frontend
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000', // Next.js frontend
-  credentials: true, // allow cookies and auth headers
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  credentials: true, 
 }));
-
-// Parse incoming JSON payloads
 app.use(express.json());
-
-// Parse cookies attached to the client request
 app.use(cookieParser());
+
+// --- NEW: Make Agenda available to your app's controllers ---
+app.locals.agenda = agenda;
 
 // --------------------
 // API Routes
@@ -52,7 +52,6 @@ app.use('/api/employee', employeeRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/outpass', outpassRoutes);
 
-// A simple root route to confirm the API is running
 app.get('/', (req, res) => res.send('🎉 QuickPass API is Running!'));
 
 // --------------------
@@ -62,12 +61,19 @@ const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
+    // 1. Connect to MongoDB
     await connectDB();
-    app.listen(PORT, () => {
+    
+    // 2. Start the Express server
+    app.listen(PORT, async () => { // <-- Made this callback async
       console.log(`✅ Server running on http://localhost:${PORT}`);
+      
+      // 3. --- NEW: Start the Agenda job processor ---
+      await agenda.start();
+      console.log('✅ Agenda job processor started.');
     });
   } catch (err) {
-    console.error(`❌ Failed to connect to the database: ${err.message}`);
+    console.error(`❌ Failed to start server: ${err.message}`);
     process.exit(1);
   }
 };

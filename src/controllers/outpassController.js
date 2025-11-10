@@ -4,6 +4,13 @@ import Outpass from '../models/Outpass.js';
 import Student from '../models/Student.js'; // UPDATED: Fixed import path
 import Employee from '../models/Employee.js';
 import uploadBufferToCloudinary from '../utils/uploadToCloudinary.js'; // UPDATED: Fixed import path
+// ... all your other controller functions ...
+import { getTwilioVoiceResponse as twilioResponse } from '../utils/twilioService.js';
+// ... all your other imports
+import { sendNotificationEmail } from '../utils/emailService.js';
+import { makeNotificationCall } from '../utils/twilioService.js';
+import { getNotificationTargets } from '../utils/notificationFinder.js';
+
 
 /**
  * @desc    Student applies for a new outpass
@@ -117,6 +124,43 @@ export const applyOutpass = asyncHandler(async (req, res) => {
     status: 'pending_faculty',
   });
 
+  // --- 8. NEW: Find Targets and Trigger Notifications ---
+  
+  // Get the full student object (needed for finder)
+  const fullStudent = await Student.findById(studentId).populate('class');
+  
+  // Find who to notify
+  const targets = await getNotificationTargets(fullStudent, outpass);
+
+  if (targets.length > 0) {
+    // Save who we are notifying
+    outpass.notifiedFaculty = targets.map(t => t._id);
+    await outpass.save();
+
+    // Send notifications (async - don't wait for these to finish)
+    targets.forEach(faculty => {
+      sendNotificationEmail(faculty, fullStudent, outpass);
+      makeNotificationCall(faculty.phone);
+    });
+  } else {
+    console.warn(`No notification targets found for student ${student.name}.`);
+    // You might want to email the HOD by default here
+  }
+
+  // --- 9. NEW: Schedule the 15-minute follow-up job ---
+  // (We will create 'agenda' in the next step)
+  try {
+    const { agenda } = req.app.locals; // Get agenda from app instance
+    await agenda.start();
+    await agenda.schedule('in 15 minutes', 'check outpass status', { 
+      outpassId: outpass._id.toString() 
+    });
+    console.log(`Scheduled 15-min check for outpass ${outpass._id}`);
+  } catch (err) {
+    console.error('Failed to schedule agenda job:', err);
+  }
+
+  // Send response back to student
   res.status(201).json(outpass);
 });
 /**
@@ -260,3 +304,178 @@ export const hodApprove = asyncHandler(async (req, res) => {
   const updatedOutpass = await outpass.save();
   res.status(200).json(updatedOutpass);
 });
+
+
+/**
+ * @desc    Provides TwiML for Twilio callback
+ * @route   POST /api/outpass/twilio-callback
+ * @access  Public
+ */
+export const getTwilioVoiceResponse = () => {
+  // This just passes the call to the service
+  return twilioResponse();
+};
+
+
+/**
+ * @desc    Get the currently processing outpass for a student
+ * @route   GET /api/outpass/current
+ * @access  Private (Student)
+ */
+export const getCurrentOutpass = asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+
+  // Find the latest active outpass that’s not finished
+  const outpass = await Outpass.findOne({
+    student: studentId,
+    status: { $in: ['pending_faculty', 'pending_hod'] },
+  })
+    .populate({
+      path: 'student',
+      populate: {
+        path: 'class',
+        populate: {
+          path: 'department',
+          select: 'name hod',
+          populate: {
+            path: 'hod',
+            select: 'name email phone',
+          },
+        },
+      },
+    })
+    .populate('facultyApprover', 'name email phone')
+    .populate('hodApprover', 'name email phone')
+    .populate('assignedMentor', 'name email phone')
+    .populate('notifiedFaculty', 'name email phone')
+    .sort({ createdAt: -1 });
+
+  if (!outpass) {
+    return res.status(404).json({ message: 'No active outpass found.' });
+  }
+
+  const student = outpass.student;
+
+  // --- Fetch mentors from Class model ---
+  let mentors = [];
+  if (student?.class?._id) {
+    const classData = await (await import('../models/Class.js')).default.findById(student.class._id)
+      .populate('mentors', 'name email phone');
+    mentors = classData?.mentors || [];
+  }
+
+  // --- Fetch HOD from Department model ---
+  let hod = null;
+  if (student?.class?.department?.hod) {
+    hod = {
+      name: student.class.department.hod.name,
+      email: student.class.department.hod.email,
+      phone: student.class.department.hod.phone,
+    };
+  }
+
+  // Build frontend-friendly response
+  const response = {
+    requestId: outpass._id,
+    status: outpass.status,
+    reasonCategory: outpass.reasonCategory,
+    reason: outpass.reason,
+    dateFrom: outpass.dateFrom,
+    dateTo: outpass.dateTo,
+    exitTime: moment(outpass.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
+    returnTime: moment(outpass.dateTo).tz('Asia/Kolkata').format('h:mm A'),
+    supportingDocumentUrl: outpass.supportingDocumentUrl,
+
+    assignedFaculty: outpass.facultyApprover
+      ? { name: outpass.facultyApprover.name, email: outpass.facultyApprover.email }
+      : null,
+
+    assignedHod: hod, // ✅ from Department model
+    assignedMentors: mentors.map(m => ({
+      name: m.name,
+      email: m.email,
+      phone: m.phone,
+    })),
+
+    notifiedFaculty: outpass.notifiedFaculty.map(f => ({
+      name: f.name,
+      email: f.email,
+      phone: f.phone,
+    })),
+
+    statusUpdates: [
+      {
+        time: outpass.createdAt,
+        message: 'Outpass application submitted successfully and faculty notified.',
+      },
+      ...(outpass.status === 'pending_hod'
+        ? [
+            {
+              time: outpass.updatedAt,
+              message: 'Faculty approved the request. Sent to HOD for review.',
+            },
+          ]
+        : []),
+      ...(outpass.status === 'approved'
+        ? [
+            {
+              time: outpass.updatedAt,
+              message: 'HOD approved the outpass. Gate pass generated.',
+            },
+          ]
+        : []),
+      ...(outpass.status === 'rejected'
+        ? [
+            {
+              time: outpass.updatedAt,
+              message: `Outpass rejected. Reason: ${outpass.rejectionReason || 'No reason provided.'}`,
+            },
+          ]
+        : []),
+      ...(outpass.status === 'cancelled_by_student'
+        ? [
+            {
+              time: outpass.updatedAt,
+              message: 'Outpass cancelled by student.',
+            },
+          ]
+        : []),
+    ],
+  };
+
+  res.status(200).json(response);
+});
+
+/**
+ * @desc    Cancel an outpass by student
+ * @route   PUT /api/outpass/:id/cancel
+ * @access  Private (Student)
+ */
+export const cancelOutpassByStudent = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const studentId = req.user.id;
+
+  const outpass = await Outpass.findById(id);
+
+  if (!outpass) {
+    res.status(404);
+    throw new Error('Outpass not found');
+  }
+
+  if (outpass.student.toString() !== studentId.toString()) {
+    res.status(403);
+    throw new Error('You are not authorized to cancel this outpass.');
+  }
+
+  if (['approved', 'rejected', 'cancelled_by_student'].includes(outpass.status)) {
+    res.status(400);
+    throw new Error('This outpass can no longer be cancelled.');
+  }
+
+  outpass.status = 'cancelled_by_student';
+  await outpass.save();
+
+  res.status(200).json({ message: 'Outpass cancelled successfully.', outpass });
+});
+
+
