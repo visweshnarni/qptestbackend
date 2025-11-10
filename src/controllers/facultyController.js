@@ -267,19 +267,19 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
   });
 });
 /* --------------------------------------------
-   GET STUDENT PROFILES (Faculty / Mentor)
+   GET STUDENT PROFILES (Faculty / Mentor / HOD)
    -------------------------------------------- */
 /**
- * @desc Faculty can search students by class, roll number, or view all
+ * @desc Faculty/HOD can view students by department, mentor’s class, specific class, or roll number
  * @route GET /api/faculty/student-profiles
- * @query ?class=ClassName OR ?roll=RollNumber
+ * @query ?roll=RollNumber OR ?class=ClassName OR ?filter=myclass|department
  * @access Private (Faculty, HOD)
  */
 export const getStudentProfiles = asyncHandler(async (req, res) => {
   const facultyId = req.user.id;
-  const { class: className, roll } = req.query; // ?class=CSO3A or ?roll=21CS1001
+  const { class: className, roll, filter } = req.query; // ?class=CSO3A, ?roll=21CS1001, ?filter=myclass|department
 
-  // Fetch faculty info
+  // 1️⃣ Fetch faculty data
   const faculty = await Employee.findById(facultyId)
     .populate('department', 'name')
     .lean();
@@ -289,14 +289,14 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
     throw new Error('Faculty not found');
   }
 
-  // Check if faculty is also a mentor
+  // 2️⃣ Check if faculty is also a mentor
   const mentorClass = await Class.findOne({ mentors: facultyId })
     .populate('department', 'name')
     .lean();
 
   const isMentor = !!mentorClass;
 
-  // ✅ 1. Search by Roll Number
+  // ✅ CASE 1: Search by Roll Number
   if (roll) {
     const student = await Student.findOne({ rollNumber: roll })
       .populate({
@@ -309,6 +309,15 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
     if (!student) {
       res.status(404);
       throw new Error('Student not found');
+    }
+
+    // Restrict access: same department or mentor’s class only
+    const sameDept = faculty.department._id.toString() === student.class.department._id.toString();
+    const sameClass = isMentor && student.class._id.toString() === mentorClass._id.toString();
+
+    if (!sameDept && !sameClass) {
+      res.status(403);
+      throw new Error('Unauthorized to access this student.');
     }
 
     return res.status(200).json({
@@ -330,8 +339,7 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
     });
   }
 
-  // ✅ 2. Search by Class Name
-  let students = [];
+  // ✅ CASE 2: Search by Class Name
   if (className) {
     const classObj = await Class.findOne({ name: className })
       .populate('department', 'name')
@@ -342,13 +350,16 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
       throw new Error('Class not found');
     }
 
-    // Only allow if faculty belongs to same department
-    if (faculty.department._id.toString() !== classObj.department._id.toString()) {
+    // Only allow if same department or is mentor of that class
+    const sameDept = faculty.department._id.toString() === classObj.department._id.toString();
+    const isMentorOfClass = isMentor && classObj._id.toString() === mentorClass._id.toString();
+
+    if (!sameDept && !isMentorOfClass) {
       res.status(403);
       throw new Error('Unauthorized to access this class.');
     }
 
-    students = await Student.find({ class: classObj._id })
+    const students = await Student.find({ class: classObj._id })
       .select('name rollNumber email phone attendancePercentage parentName primaryParentPhone secondaryParentPhone')
       .sort({ rollNumber: 1 })
       .lean();
@@ -362,16 +373,26 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
     });
   }
 
-  // ✅ 3. Default: Show all students under faculty’s department (or mentor’s class)
-  let query = {};
-  if (isMentor) {
-    query = { class: mentorClass._id };
-  } else {
-    const deptClasses = await Class.find({ department: faculty.department._id }).select('_id');
-    query = { class: { $in: deptClasses.map(c => c._id) } };
+  // ✅ CASE 3: Filter = myclass (mentor’s class only)
+  if (filter === 'myclass' && isMentor) {
+    const students = await Student.find({ class: mentorClass._id })
+      .select('name rollNumber email phone attendancePercentage parentName primaryParentPhone secondaryParentPhone')
+      .sort({ rollNumber: 1 })
+      .lean();
+
+    return res.status(200).json({
+      type: 'list',
+      context: 'myclass',
+      class: mentorClass.name,
+      department: mentorClass.department.name,
+      total: students.length,
+      students,
+    });
   }
 
-  const deptStudents = await Student.find(query)
+  // ✅ CASE 4: Filter = department or default (for faculty / HOD)
+  const deptClasses = await Class.find({ department: faculty.department._id }).select('_id name');
+  const deptStudents = await Student.find({ class: { $in: deptClasses.map(c => c._id) } })
     .select('name rollNumber email phone attendancePercentage parentName primaryParentPhone class')
     .populate({
       path: 'class',
@@ -381,9 +402,10 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
     .sort({ rollNumber: 1 })
     .lean();
 
-  res.status(200).json({
+  return res.status(200).json({
     type: 'list',
-    context: isMentor ? 'myclass' : 'department',
+    context: 'department',
+    department: faculty.department.name,
     total: deptStudents.length,
     students: deptStudents.map(s => ({
       name: s.name,
@@ -398,7 +420,6 @@ export const getStudentProfiles = asyncHandler(async (req, res) => {
     })),
   });
 });
-
 
 /* --------------------------------------------
    GET ALL CLASSES UNDER FACULTY DEPARTMENT
