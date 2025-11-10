@@ -267,3 +267,96 @@ export const handleHodApproval = asyncHandler(async (req, res) => {
     hodApprover: hodId,
   });
 });
+
+/* --------------------------------------------
+   HOD DEPARTMENT REPORTS
+   -------------------------------------------- */
+/**
+ * @desc Generate department-level reports for HOD
+ * @route GET /api/hod/reports
+ * @query ?range=this_month|overall
+ * @access Private (HOD)
+ */
+export const getHodReports = asyncHandler(async (req, res) => {
+  const hodId = req.user.id;
+  const { range } = req.query; // ?range=this_month or ?range=overall
+
+  // 1️⃣ Validate HOD
+  const hod = await Employee.findById(hodId).populate('department', 'name').lean();
+  if (!hod) {
+    res.status(404);
+    throw new Error('HOD not found');
+  }
+
+  // 2️⃣ Get department faculty list
+  const facultyList = await Employee.find({
+    department: hod.department._id,
+    role: 'faculty',
+  })
+    .select('_id name email')
+    .lean();
+
+  const facultyIds = facultyList.map(f => f._id);
+
+  // 3️⃣ Time range filter (if this_month)
+  const dateFilter = {};
+  if (range === 'this_month') {
+    const startOfMonth = moment().startOf('month').toDate();
+    dateFilter.createdAt = { $gte: startOfMonth };
+  }
+
+  // 4️⃣ Fetch all department outpasses (approved, rejected)
+  const departmentOutpasses = await Outpass.find({
+    facultyApprover: { $in: facultyIds },
+    ...dateFilter,
+  })
+    .populate('facultyApprover', 'name')
+    .lean();
+
+  const totalRequests = departmentOutpasses.length;
+  const approvedCount = departmentOutpasses.filter(o => o.status === 'approved').length;
+  const rejectedCount = departmentOutpasses.filter(o => o.status === 'rejected').length;
+
+  // 5️⃣ Calculate average approval time
+  const approvedOutpasses = departmentOutpasses.filter(o => o.status === 'approved' && o.createdAt && o.updatedAt);
+  const avgApprovalTimeMins =
+    approvedOutpasses.length > 0
+      ? Math.round(
+          approvedOutpasses.reduce((sum, o) => sum + (new Date(o.updatedAt) - new Date(o.createdAt)) / 60000, 0) /
+            approvedOutpasses.length
+        )
+      : 0;
+
+  // 6️⃣ Faculty performance breakdown
+  const performance = facultyList.map(fac => {
+    const fOutpasses = departmentOutpasses.filter(o => o.facultyApprover?._id?.toString() === fac._id.toString());
+    const total = fOutpasses.length;
+    const approved = fOutpasses.filter(o => o.status === 'approved').length;
+    const rejected = fOutpasses.filter(o => o.status === 'rejected').length;
+    const approvalRate = total > 0 ? Math.round((approved / total) * 100) : 0;
+
+    return {
+      name: fac.name,
+      totalRequests: total,
+      approved,
+      rejected,
+      approvalRate: `${approvalRate}%`,
+    };
+  });
+
+  // Sort descending by total requests
+  performance.sort((a, b) => b.totalRequests - a.totalRequests);
+
+  // 7️⃣ Response
+  res.status(200).json({
+    department: hod.department.name,
+    timeRange: range === 'this_month' ? 'This Month' : 'Overall',
+    stats: {
+      totalRequests,
+      approved: approvedCount,
+      rejected: rejectedCount,
+      avgApprovalTime: `${avgApprovalTimeMins} mins`,
+    },
+    performance,
+  });
+});
