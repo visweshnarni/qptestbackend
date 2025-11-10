@@ -6,7 +6,7 @@ import Employee from '../models/Employee.js';
 import Class from '../models/Class.js';
 
 /**
- * @desc HOD Dashboard — Department-level summary and pending approvals
+ * @desc HOD Dashboard — Department-level summary, pending approvals, parent verifications
  * @route GET /api/hod/dashboard
  * @access Private (HOD)
  */
@@ -64,6 +64,7 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
       },
     })
     .populate('facultyApprover', 'name')
+    .populate('parentContactVerified.by', 'name role') // ✅ Populate who verified
     .lean();
 
   const formattedPending = pendingRequests.map(req => ({
@@ -82,8 +83,17 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
     exitTime: moment(req.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
     returnTime: moment(req.dateTo).tz('Asia/Kolkata').format('h:mm A'),
     requestedAt: moment(req.createdAt).tz('Asia/Kolkata').fromNow(),
-    urgency:
-      /^emergency$/i.test(req.reasonCategory) ? 'HIGH' : 'NORMAL',
+    urgency: /^emergency$/i.test(req.reasonCategory) ? 'HIGH' : 'NORMAL',
+
+    // ✅ Parent Verification Info
+    parentVerification: {
+      status: req.parentContactVerified?.status || false,
+      verifiedBy: req.parentContactVerified?.by?.name || null,
+      verifierRole: req.parentContactVerified?.by?.role || null,
+      verifiedAt: req.parentContactVerified?.at
+        ? moment(req.parentContactVerified.at).tz('Asia/Kolkata').format('DD MMM, h:mm A')
+        : null,
+    },
   }));
 
   // 7️⃣ Urgent Alerts (Emergency)
@@ -98,6 +108,7 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
       select: 'name rollNumber class',
       populate: { path: 'class', select: 'name' },
     })
+    .populate('parentContactVerified.by', 'name')
     .lean();
 
   const formattedUrgentAlerts = urgentAlerts.map(a => ({
@@ -105,6 +116,7 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
     message: `Emergency outpass from ${a.student?.name} (${a.student?.rollNumber})`,
     class: a.student?.class?.name,
     timeAgo: moment(a.createdAt).tz('Asia/Kolkata').fromNow(),
+    parentVerified: a.parentContactVerified?.status || false, // ✅ Quick check for alert cards
   }));
 
   // 8️⃣ Final Response
