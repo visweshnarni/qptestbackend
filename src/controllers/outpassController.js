@@ -552,3 +552,5 @@ export const getOutpassHistory = asyncHandler(async (req, res) => {
     outpasses: list,
   });
 });
+
+
