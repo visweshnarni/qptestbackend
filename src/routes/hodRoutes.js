@@ -5,6 +5,7 @@ import { getHodDashboard } from '../controllers/hodController.js';
 import { protect, authorize } from '../middlewares/authMiddleware.js';
 import { getPendingHodApprovals, handleHodApproval } from '../controllers/hodController.js';
 import { getHodReports } from '../controllers/hodController.js';
+import { getHodHistory } from '../controllers/hodController.js';
 
 const router = express.Router();
 
@@ -38,6 +39,9 @@ router.put('/outpass/:id/action', protect, authorize('hod'), handleHodApproval);
  * @access  Private (HOD)
  */
 router.get('/reports', protect, authorize('hod'), getHodReports);
+// HOD History
+router.get('/history', protect, getHodHistory);
+
 
 
 export default router;

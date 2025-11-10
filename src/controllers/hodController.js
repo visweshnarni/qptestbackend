@@ -360,3 +360,114 @@ export const getHodReports = asyncHandler(async (req, res) => {
     performance,
   });
 });
+
+/**
+ * @desc    HOD Decision History - view processed outpasses, approval stats, and filtering
+ * @route   GET /api/hod/history
+ * @access  Private (HOD)
+ *
+ * Query Parameters:
+ *  - status=approved|rejected|all
+ *  - sort=newest|oldest (default newest)
+ *  - page, limit
+ */
+export const getHodHistory = asyncHandler(async (req, res) => {
+  const hodId = req.user.id;
+  const { status = 'all', sort = 'newest', page = 1, limit = 20 } = req.query;
+
+  // 1️⃣ Get HOD details and department
+  const hod = await Employee.findById(hodId).populate('department', 'name').lean();
+  if (!hod || hod.role !== 'hod') {
+    res.status(403);
+    throw new Error('Access denied. Only HODs can view this.');
+  }
+
+  // 2️⃣ Get all students in HOD's department
+  const deptClasses = await Class.find({ department: hod.department._id }).select('_id').lean();
+  const deptStudents = await Student.find({ class: { $in: deptClasses.map(c => c._id) } })
+    .select('_id')
+    .lean();
+  const studentIds = deptStudents.map(s => s._id);
+
+  // 3️⃣ Base query — only past decisions (approved/rejected)
+  const baseQuery = {
+    student: { $in: studentIds },
+    status: { $in: ['approved', 'rejected'] },
+    hodApprover: hodId
+  };
+
+  // 4️⃣ Apply status filter
+  if (status && status !== 'all') {
+    baseQuery.status = status;
+  }
+
+  // 5️⃣ Summary counts
+  const [totalProcessed, approvedCount, rejectedCount] = await Promise.all([
+    Outpass.countDocuments({ hodApprover: hodId, status: { $in: ['approved', 'rejected'] } }),
+    Outpass.countDocuments({ hodApprover: hodId, status: 'approved' }),
+    Outpass.countDocuments({ hodApprover: hodId, status: 'rejected' }),
+  ]);
+
+  const approvalRate =
+    totalProcessed > 0 ? Math.round((approvedCount / totalProcessed) * 100) : 0;
+
+  // 6️⃣ Pagination setup
+  const pageNum = Math.max(1, parseInt(page, 10));
+  const pageLimit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+  const skip = (pageNum - 1) * pageLimit;
+  const sortOrder = sort === 'oldest' ? 1 : -1;
+
+  // 7️⃣ Fetch HOD decisions
+  const outpasses = await Outpass.find(baseQuery)
+    .sort({ updatedAt: sortOrder })
+    .skip(skip)
+    .limit(pageLimit)
+    .populate({
+      path: 'student',
+      select: 'name rollNumber class',
+      populate: {
+        path: 'class',
+        select: 'name department',
+        populate: { path: 'department', select: 'name' },
+      },
+    })
+    .populate('facultyApprover', 'name employeeId')
+    .lean();
+
+  // 8️⃣ Format result list for frontend
+  const formatted = outpasses.map(o => ({
+    requestId: o._id,
+    studentName: o.student?.name,
+    rollNumber: o.student?.rollNumber,
+    class: o.student?.class?.name,
+    department: o.student?.class?.department?.name,
+    facultyApprover: o.facultyApprover ? o.facultyApprover.name : 'N/A',
+    reasonCategory: o.reasonCategory,
+    reason: o.reason,
+    decision: o.status, // approved | rejected
+    rejectionReason: o.rejectionReason || null,
+    processedOn: moment(o.updatedAt).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm'),
+  }));
+
+  // 9️⃣ Pagination metadata
+  const totalMatching = await Outpass.countDocuments(baseQuery);
+  const totalPages = Math.ceil(totalMatching / pageLimit);
+
+  // 🔟 Send response
+  res.status(200).json({
+    summary: {
+      totalProcessed,
+      approved: approvedCount,
+      rejected: rejectedCount,
+      approvalRate: `${approvalRate}%`,
+    },
+    meta: {
+      page: pageNum,
+      limit: pageLimit,
+      totalPages,
+      totalMatching,
+    },
+    count: formatted.length,
+    outpasses: formatted,
+  });
+});
