@@ -151,3 +151,114 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
     urgentAlerts,
   });
 });
+
+
+
+/* --------------------------------------------
+   GET FACULTY PENDING REQUESTS
+   -------------------------------------------- */
+export const getPendingRequests = asyncHandler(async (req, res) => {
+  const facultyId = req.user.id;
+  const { filter } = req.query; // ?filter=myclass or ?filter=all
+
+  const faculty = await Employee.findById(facultyId).populate('department', 'name').lean();
+  if (!faculty) throw new Error('Faculty not found');
+
+  const mentorClass = await Class.findOne({ mentors: facultyId }).populate('department', 'name').lean();
+  const isMentor = !!mentorClass;
+
+  const query = { status: 'pending_faculty' };
+  if (filter === 'myclass' && isMentor) {
+    const classStudents = await Student.find({ class: mentorClass._id }).select('_id');
+    query.student = { $in: classStudents.map(s => s._id) };
+  } else {
+    const deptClasses = await Class.find({ department: faculty.department._id }).select('_id');
+    const deptStudents = await Student.find({ class: { $in: deptClasses.map(c => c._id) } }).select('_id');
+    query.student = { $in: deptStudents.map(s => s._id) };
+  }
+
+  const outpasses = await Outpass.find(query)
+    .populate({
+      path: 'student',
+      select: 'name rollNumber email phone attendancePercentage class parentName primaryParentPhone secondaryParentPhone',
+      populate: {
+        path: 'class',
+        select: 'name department',
+        populate: { path: 'department', select: 'name' },
+      },
+    })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const formattedList = outpasses.map(o => ({
+    requestId: o._id,
+    studentName: o.student?.name,
+    rollNumber: o.student?.rollNumber,
+    email: o.student?.email,
+    phone: o.student?.phone,
+    class: o.student?.class?.name,
+    department: o.student?.class?.department?.name,
+    reasonCategory: o.reasonCategory,
+    reason: o.reason,
+    attendanceAtApply: o.attendanceAtApply,
+    lowAttendance: o.attendanceAtApply < 75,
+    parentName: o.student?.parentName,
+    parentContact: o.student?.primaryParentPhone,
+    alternateContact: o.alternateContact || o.student?.secondaryParentPhone || null,
+    exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
+    returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('h:mm A'),
+    requestedAt: moment(o.createdAt).tz('Asia/Kolkata').fromNow(),
+    isEmergency: /^emergency$/i.test(o.reasonCategory),
+    parentVerified: o.parentContactVerified?.status || false,
+  }));
+
+  const pendingCount = formattedList.length;
+  const urgentCount = formattedList.filter(r => r.isEmergency).length;
+
+  res.status(200).json({
+    summary: { pending: pendingCount, urgent: urgentCount },
+    requests: formattedList,
+  });
+});
+
+/* --------------------------------------------
+   FACULTY APPROVE / REJECT OUTPASS
+   -------------------------------------------- */
+export const handleFacultyApproval = asyncHandler(async (req, res) => {
+  const facultyId = req.user.id;
+  const { id } = req.params;
+  const { action, rejectionReason, parentVerified } = req.body;
+
+  const outpass = await Outpass.findById(id).populate('student', 'attendancePercentage');
+  if (!outpass) throw new Error('Outpass not found');
+  if (outpass.status !== 'pending_faculty')
+    throw new Error('Outpass is not pending faculty approval.');
+
+  // Manual parent verification (if low attendance)
+  if (parentVerified) {
+    outpass.parentContactVerified = {
+      status: true,
+      by: facultyId,
+      at: new Date(),
+    };
+  }
+
+  if (action === 'approve') {
+    outpass.status = 'pending_hod';
+    outpass.facultyApprover = facultyId;
+  } else if (action === 'reject') {
+    outpass.status = 'rejected';
+    outpass.facultyApprover = facultyId;
+    outpass.rejectionReason = rejectionReason || 'Rejected by faculty';
+  } else {
+    throw new Error('Invalid action. Must be "approve" or "reject".');
+  }
+
+  await outpass.save();
+
+  res.status(200).json({
+    message: `Outpass ${action === 'approve' ? 'approved and sent to HOD' : 'rejected'} successfully.`,
+    outpassId: outpass._id,
+    status: outpass.status,
+  });
+});
