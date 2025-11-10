@@ -21,6 +21,8 @@ import adminRoutes from './src/routes/adminRoutes.js';
 import outpassRoutes from './src/routes/outpassRoutes.js';
 import facultyRoutes from './src/routes/facultyRoutes.js';
 
+import hodRoutes from './src/routes/hodRoutes.js';
+
 // ESM-equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +55,9 @@ app.use('/api/employee', employeeRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/outpass', outpassRoutes);
 app.use('/api/faculty', facultyRoutes); // ✅ ADD THIS LINE
+
+app.use('/api/hod', hodRoutes);
+
 
 app.get('/', (req, res) => res.send('🎉 QuickPass API is Running!'));
 

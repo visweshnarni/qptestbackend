@@ -4,6 +4,7 @@ import Outpass from '../models/Outpass.js';
 import Student from '../models/Student.js';
 import Employee from '../models/Employee.js';
 import Class from '../models/Class.js';
+import { notifyPendingHodRequests } from '../utils/hodNotification/hodNotificationService.js';
 
 /**
  * @desc Faculty or Mentor Dashboard
@@ -243,10 +244,13 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
     };
   }
 
-  if (action === 'approve') {
-    outpass.status = 'pending_hod';
-    outpass.facultyApprover = facultyId;
-  } else if (action === 'reject') {
+ if (action === 'approve') {
+  outpass.status = 'pending_hod';
+  outpass.facultyApprover = facultyId;
+
+  // ✅ Trigger initial notification to HOD immediately
+  notifyPendingHodRequests();  // async trigger, non-blocking
+}else if (action === 'reject') {
     outpass.status = 'rejected';
     outpass.facultyApprover = facultyId;
     outpass.rejectionReason = rejectionReason || 'Rejected by faculty';
