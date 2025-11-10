@@ -4,6 +4,9 @@ import {
   getFacultyDashboard,
   getPendingRequests,
   handleFacultyApproval,
+  getStudentProfiles,
+  getFacultyClasses,
+  getFacultyHistory,
 } from '../controllers/facultyController.js';
 
 const router = express.Router();
@@ -28,5 +31,18 @@ router.get('/pending-requests', protect, authorize('faculty', 'hod'), getPending
  * @access  Private (Faculty)
  */
 router.put('/outpass/:id/action', protect, authorize('faculty', 'hod'), handleFacultyApproval);
-
+/**
+ * @route   GET /api/faculty/student-profiles
+ * @desc    Faculty can view or search student profiles
+ * @access  Private (Faculty, HOD)
+ */
+router.get('/student-profiles', protect, authorize('faculty', 'hod'), getStudentProfiles);
+/**
+ * @route   GET /api/faculty/classes
+ * @desc    Get all classes under faculty’s department (for dropdowns)
+ * @access  Private (Faculty, HOD)
+ */
+router.get('/classes', protect, authorize('faculty', 'hod'), getFacultyClasses);
+// History route
+router.get('/history', protect, authorize('faculty', 'hod'), getFacultyHistory);
 export default router;

@@ -266,3 +266,331 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
     status: outpass.status,
   });
 });
+/* --------------------------------------------
+   GET STUDENT PROFILES (Faculty / Mentor)
+   -------------------------------------------- */
+/**
+ * @desc Faculty can search students by class, roll number, or view all
+ * @route GET /api/faculty/student-profiles
+ * @query ?class=ClassName OR ?roll=RollNumber
+ * @access Private (Faculty, HOD)
+ */
+export const getStudentProfiles = asyncHandler(async (req, res) => {
+  const facultyId = req.user.id;
+  const { class: className, roll } = req.query; // ?class=CSO3A or ?roll=21CS1001
+
+  // Fetch faculty info
+  const faculty = await Employee.findById(facultyId)
+    .populate('department', 'name')
+    .lean();
+
+  if (!faculty) {
+    res.status(404);
+    throw new Error('Faculty not found');
+  }
+
+  // Check if faculty is also a mentor
+  const mentorClass = await Class.findOne({ mentors: facultyId })
+    .populate('department', 'name')
+    .lean();
+
+  const isMentor = !!mentorClass;
+
+  // ✅ 1. Search by Roll Number
+  if (roll) {
+    const student = await Student.findOne({ rollNumber: roll })
+      .populate({
+        path: 'class',
+        select: 'name year department',
+        populate: { path: 'department', select: 'name' },
+      })
+      .lean();
+
+    if (!student) {
+      res.status(404);
+      throw new Error('Student not found');
+    }
+
+    return res.status(200).json({
+      type: 'single',
+      student: {
+        name: student.name,
+        email: student.email,
+        rollNumber: student.rollNumber,
+        phone: student.phone,
+        class: student.class?.name,
+        year: student.class?.year,
+        department: student.class?.department?.name,
+        parentName: student.parentName,
+        primaryParentPhone: student.primaryParentPhone,
+        secondaryParentPhone: student.secondaryParentPhone,
+        attendancePercentage: student.attendancePercentage,
+        joinedAt: new Date(student.createdAt).toLocaleDateString('en-IN'),
+      },
+    });
+  }
+
+  // ✅ 2. Search by Class Name
+  let students = [];
+  if (className) {
+    const classObj = await Class.findOne({ name: className })
+      .populate('department', 'name')
+      .lean();
+
+    if (!classObj) {
+      res.status(404);
+      throw new Error('Class not found');
+    }
+
+    // Only allow if faculty belongs to same department
+    if (faculty.department._id.toString() !== classObj.department._id.toString()) {
+      res.status(403);
+      throw new Error('Unauthorized to access this class.');
+    }
+
+    students = await Student.find({ class: classObj._id })
+      .select('name rollNumber email phone attendancePercentage parentName primaryParentPhone secondaryParentPhone')
+      .sort({ rollNumber: 1 })
+      .lean();
+
+    return res.status(200).json({
+      type: 'class',
+      class: classObj.name,
+      department: classObj.department.name,
+      count: students.length,
+      students,
+    });
+  }
+
+  // ✅ 3. Default: Show all students under faculty’s department (or mentor’s class)
+  let query = {};
+  if (isMentor) {
+    query = { class: mentorClass._id };
+  } else {
+    const deptClasses = await Class.find({ department: faculty.department._id }).select('_id');
+    query = { class: { $in: deptClasses.map(c => c._id) } };
+  }
+
+  const deptStudents = await Student.find(query)
+    .select('name rollNumber email phone attendancePercentage parentName primaryParentPhone class')
+    .populate({
+      path: 'class',
+      select: 'name department',
+      populate: { path: 'department', select: 'name' },
+    })
+    .sort({ rollNumber: 1 })
+    .lean();
+
+  res.status(200).json({
+    type: 'list',
+    context: isMentor ? 'myclass' : 'department',
+    total: deptStudents.length,
+    students: deptStudents.map(s => ({
+      name: s.name,
+      rollNumber: s.rollNumber,
+      class: s.class?.name,
+      department: s.class?.department?.name,
+      phone: s.phone,
+      email: s.email,
+      attendance: s.attendancePercentage,
+      parentName: s.parentName,
+      parentContact: s.primaryParentPhone,
+    })),
+  });
+});
+
+
+/* --------------------------------------------
+   GET ALL CLASSES UNDER FACULTY DEPARTMENT
+   -------------------------------------------- */
+export const getFacultyClasses = asyncHandler(async (req, res) => {
+  const facultyId = req.user.id;
+  const faculty = await Employee.findById(facultyId)
+    .populate('department', 'name')
+    .lean();
+
+  if (!faculty) {
+    res.status(404);
+    throw new Error('Faculty not found');
+  }
+
+  // Get all classes in the same department
+  const classes = await Class.find({ department: faculty.department._id })
+    .select('name year')
+    .sort({ year: 1 })
+    .lean();
+
+  res.status(200).json({
+    department: faculty.department.name,
+    total: classes.length,
+    classes,
+  });
+});
+
+
+/**
+ * @desc    Faculty history (past outpasses) with filters, counts and pagination
+ * @route   GET /api/faculty/history
+ * @access  Private (Faculty, HOD, Mentor)
+ *
+ * Notes:
+ *  - "history" = past/finished outpasses, so we EXCLUDE statuses pending_faculty and pending_hod from summary counts
+ *  - Supports filters: status, approvedByMe, rejectedByMe, studentRoll, class (name), myclass (mentor)
+ *  - Pagination: page, limit
+ *  - Sorting: sort= newest | oldest (default newest)
+ */
+export const getFacultyHistory = asyncHandler(async (req, res) => {
+  const facultyId = req.user.id;
+  const {
+    status,            // approved | rejected | cancelled | all (default all)
+    approvedByMe,      // true | false
+    rejectedByMe,      // true | false
+    studentRoll,       // exact roll number
+    class: className,  // class name e.g., "CSE-3A"
+    myclass,           // true => only mentor's class (if mentor)
+    sort,              // newest | oldest
+    page = 1,
+    limit = 20,
+  } = req.query;
+
+  // 1. get faculty and mentor-class
+  const faculty = await Employee.findById(facultyId).populate('department', 'name').lean();
+  if (!faculty) {
+    res.status(404);
+    throw new Error('Faculty not found');
+  }
+  const mentorClass = await Class.findOne({ mentors: facultyId }).lean();
+  const isMentor = !!mentorClass;
+
+  // 2. build base student list that faculty can view
+  // If myclass requested and faculty is mentor -> restrict to that class
+  // Else use department classes
+  let studentIdsForScope = [];
+  if (myclass === 'true' || myclass === '1') {
+    if (!isMentor) {
+      // no access to myclass filter if not a mentor
+      return res.status(403).json({ message: 'Not a mentor / no myclass access.' });
+    }
+    const classStudents = await Student.find({ class: mentorClass._id }).select('_id').lean();
+    studentIdsForScope = classStudents.map(s => s._id);
+  } else if (className) {
+    // find class by name under faculty department
+    const cls = await Class.findOne({ name: className, department: faculty.department._id }).select('_id').lean();
+    if (!cls) {
+      return res.status(200).json({ summary: {}, count: 0, outpasses: [] });
+    }
+    const classStudents = await Student.find({ class: cls._id }).select('_id').lean();
+    studentIdsForScope = classStudents.map(s => s._id);
+  } else {
+    // department-wide
+    const deptClasses = await Class.find({ department: faculty.department._id }).select('_id').lean();
+    const deptStudents = await Student.find({ class: { $in: deptClasses.map(c => c._id) } }).select('_id').lean();
+    studentIdsForScope = deptStudents.map(s => s._id);
+  }
+
+  // 3. base query for history: exclude pending statuses (these are 'currently processing')
+  const baseQuery = {
+    student: { $in: studentIdsForScope },
+    status: { $nin: ['pending_faculty', 'pending_hod'] }
+  };
+
+  // 4. apply status filter if provided
+  if (status && status !== 'all') {
+    if (status === 'cancelled') baseQuery.status = 'cancelled_by_student';
+    else baseQuery.status = status; // 'approved' | 'rejected'
+  }
+
+  // 5. studentRoll filter
+  if (studentRoll) {
+    const student = await Student.findOne({ rollNumber: studentRoll }).select('_id').lean();
+    if (!student) {
+      return res.status(200).json({ summary: {}, count: 0, outpasses: [] });
+    }
+    // ensure requested student is within faculty scope
+    if (!studentIdsForScope.map(String).includes(String(student._id))) {
+      return res.status(403).json({ message: 'You do not have access to this student history.' });
+    }
+    baseQuery.student = student._id;
+  }
+
+  // 6. approvedByMe / rejectedByMe flags
+  if (approvedByMe === 'true' || approvedByMe === '1') {
+    baseQuery.facultyApprover = facultyId;
+    baseQuery.status = 'approved';
+  }
+  if (rejectedByMe === 'true' || rejectedByMe === '1') {
+    baseQuery.facultyApprover = facultyId;
+    baseQuery.status = 'rejected';
+  }
+
+  // 7. counts (summary) for department/class scope (exclude pending)
+  const countBase = { student: { $in: studentIdsForScope }, status: { $nin: ['pending_faculty', 'pending_hod'] } };
+
+  const [ total, approved, rejected, cancelled ] = await Promise.all([
+    Outpass.countDocuments(countBase),
+    Outpass.countDocuments({ ...countBase, status: 'approved' }),
+    Outpass.countDocuments({ ...countBase, status: 'rejected' }),
+    Outpass.countDocuments({ ...countBase, status: 'cancelled_by_student' }),
+  ]);
+
+  // 8. pagination and sorting
+  const pageNum = Math.max(1, parseInt(page, 10));
+  const pageLimit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+  const skip = (pageNum - 1) * pageLimit;
+  const sortOrder = sort === 'oldest' ? 1 : -1;
+
+  // 9. fetch outpasses
+  const outpasses = await Outpass.find(baseQuery)
+    .sort({ createdAt: sortOrder })
+    .skip(skip)
+    .limit(pageLimit)
+    .populate({
+      path: 'student',
+      select: 'name rollNumber email phone attendancePercentage class parentName primaryParentPhone secondaryParentPhone',
+      populate: {
+        path: 'class',
+        select: 'name department',
+        populate: { path: 'department', select: 'name' },
+      },
+    })
+    .populate('facultyApprover', 'name employeeId')
+    .populate('hodApprover', 'name employeeId')
+    .lean();
+
+  // 10. format list
+  const formatted = outpasses.map(o => ({
+    requestId: o._id,
+    status: o.status === 'cancelled_by_student' ? 'cancelled' : o.status,
+    reasonCategory: o.reasonCategory,
+    reason: o.reason,
+    student: {
+      name: o.student?.name,
+      rollNumber: o.student?.rollNumber,
+      class: o.student?.class?.name,
+      department: o.student?.class?.department?.name,
+      email: o.student?.email,
+      phone: o.student?.phone,
+      parentName: o.student?.parentName,
+      parentContact: o.student?.primaryParentPhone,
+      alternateContact: o.alternateContact || o.student?.secondaryParentPhone || null,
+      attendanceAtApply: o.attendanceAtApply,
+    },
+    exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm'),
+    returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm'),
+    requestedAt: moment(o.createdAt).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm'),
+    facultyApprover: o.facultyApprover ? { id: o.facultyApprover._id, name: o.facultyApprover.name } : null,
+    hodApprover: o.hodApprover ? { id: o.hodApprover._id, name: o.hodApprover.name } : null,
+    rejectionReason: o.rejectionReason || null,
+  }));
+
+  // 11. total pages (for pagination)
+  const totalMatching = await Outpass.countDocuments(baseQuery);
+  const totalPages = Math.ceil(totalMatching / pageLimit);
+
+  res.status(200).json({
+    summary: { total, approved, rejected, cancelled },
+    meta: { page: pageNum, limit: pageLimit, totalPages, totalMatching },
+    count: formatted.length,
+    outpasses: formatted,
+  });
+});
