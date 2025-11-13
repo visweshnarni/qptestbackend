@@ -19,7 +19,7 @@ export const makeHodSummaryCall = async (hodPhone, pendingCount) => {
     );
     twimlResponse.hangup();
 
-    const twimlUrl = `${process.env.NGROK_URL}/api/outpass/hod-callback`;
+    const twimlUrl = `${process.env.NGROK_URL}/api/hod/outpass/hod-callback`;
 
     await client.calls.create({
       to: hodPhone,

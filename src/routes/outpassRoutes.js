@@ -9,6 +9,7 @@ import {
   getOutpassHistory, 
 } from '../controllers/outpassController.js';
 import { protect, authorize } from '../middlewares/authMiddleware.js';
+import { getTwilioVoiceResponse } from '../controllers/outpassController.js';
 import { upload } from '../utils/uploadToCloudinary.js';
 import express from 'express';
 
@@ -32,5 +33,13 @@ router.put('/:id/faculty-approve', protect, authorize('faculty'), facultyApprove
 router.put('/:id/hod-approve', protect, authorize('hod'), hodApprove);
 
 router.get('/history', protect, authorize('student'), getOutpassHistory);
+router.post(
+  '/twilio-callback',
+  (req, res) => {
+    const xml = getTwilioVoiceResponse();
+    res.type('text/xml');
+    res.send(xml);
+  }
+);
 
 export default router;
