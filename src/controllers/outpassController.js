@@ -10,7 +10,39 @@ import { getTwilioVoiceResponse as twilioResponse } from '../utils/twilioService
 import { sendNotificationEmail } from '../utils/emailService.js';
 import { makeNotificationCall } from '../utils/twilioService.js';
 import { getNotificationTargets } from '../utils/notificationFinder.js';
+import axios from "axios";
+import CollegeConfig from "../models/CollegeConfig.js";
+import { validateOutpassWithML } from "../services/ml/mlValidationService.js";
+import { initiateParentCalls } from "../services/parent/parentCallService.js";
+import { notifyFacultyForOutpass } from "../services/faculty/facultyNotificationService.js";
 
+// import CollegeConfig from "../models/CollegeConfig.js";
+
+const getCollegeConfig = async () => {
+  const config = await CollegeConfig.findOne();
+  if (!config) {
+    throw new Error("College configuration missing.");
+  }
+  return config;
+};
+
+
+const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2-lat1) * Math.PI/180;
+  const Δλ = (lon2-lon1) * Math.PI/180;
+
+  const a =
+    Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ/2) * Math.sin(Δλ/2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+  return R * c;
+};
 
 /**
  * @desc    Student applies for a new outpass
@@ -18,150 +50,274 @@ import { getNotificationTargets } from '../utils/notificationFinder.js';
  * @access  Private (Student)
  */
 export const applyOutpass = asyncHandler(async (req, res) => {
-  // --- 1. Time Validation ---
-  const now = moment().tz('Asia/Kolkata'); 
-  const hour = now.hour();
 
-  // // Validate college timings (8 AM to 4 PM)
-  // if (hour < 8 || hour >= 16) {
-  //   res.status(400);
-  //   throw new Error('Outpass can only be applied for during college hours (8:00 AM - 4:00 PM).');
-  // }
+  const now = moment().tz("Asia/Kolkata");
 
-  // --- 2. Get Form Data ---
   const {
     reasonCategory,
     reason,
-    dateOfExit,    // e.g., "2025-11-07"
-    timeOfExit,    // e.g., "1:30 PM"
-    timeOfReturn,  // <-- MODIFIED: Get the return time from the body
+    dateOfExit,
+    timeOfExit,
+    timeOfReturn,
     alternateContact,
+    latitude,
+    longitude
   } = req.body;
-  const studentId = req.user.id; // From 'protect' middleware
 
-  // <-- MODIFIED: Added timeOfReturn to the check
+  const studentId = req.user.id;
+
   if (!reasonCategory || !reason || !dateOfExit || !timeOfExit || !timeOfReturn) {
-    res.status(400);
-    throw new Error('Please fill all required fields, including exit and return times.');
+    throw new Error("Missing required fields");
   }
 
-  // --- 3. "Today Only" Validation ---
-  const todayString = now.format('YYYY-MM-DD');
+  /*
+  ==========================
+  1️⃣ TODAY VALIDATION
+  ==========================
+  */
+  const todayString = now.format("YYYY-MM-DD");
+
   if (dateOfExit !== todayString) {
-    res.status(400);
-    throw new Error('Outpass can only be applied for the current day. You cannot apply for a future date.');
+    throw new Error("Outpass must be applied for today only.");
   }
 
-  // --- 4. Get Student Attendance ---
-  const student = await Student.findById(studentId).select('name attendancePercentage');
+  /*
+  ==========================
+  2️⃣ STUDENT DATA
+  ==========================
+  */
+  // Ensure we select 'class' so the populate actually works
+  const student = await Student.findById(studentId)
+    .populate("class")
+    .select("name attendancePercentage primaryParentPhone secondaryParentPhone class");
+
   if (!student) {
-    res.status(404);
-    throw new Error('Student profile not found.');
+    throw new Error("Student not found");
   }
 
-  // --- 5. Handle File Upload (if one exists) ---
+  if (!student.class || !student.class.semesterStartDate || !student.class.semesterEndDate) {
+    throw new Error("Student class or semester dates are not configured properly.");
+  }
+
+  /*
+  ==========================
+  3️⃣ COLLEGE CONFIG
+  ==========================
+  */
+  const collegeConfig = await getCollegeConfig();
+
+  const distance = calculateDistanceMeters(
+    latitude,
+    longitude,
+    collegeConfig.location.latitude,
+    collegeConfig.location.longitude
+  );
+
+  if (distance > collegeConfig.allowedRadiusMeters) {
+    throw new Error("You must apply from within college campus.");
+  }
+
+  /*
+  ==========================
+  4️⃣ FILE UPLOAD
+  ==========================
+  */
   let supportingDocumentUrl = null;
+
   if (req.file) {
-    try {
-      supportingDocumentUrl = await uploadBufferToCloudinary(
-        req.file.buffer,
-        student.name,
-        req.file.originalname
-      );
-    } catch (uploadError) {
-      console.error(uploadError);
-      res.status(500);
-      throw new Error('Failed to upload supporting document.');
-    }
+    supportingDocumentUrl = await uploadBufferToCloudinary(
+      req.file.buffer,
+      student.name,
+      req.file.originalname
+    );
   }
 
-  // --- 6. Calculate Timestamps from 12-hr Format ---
-
-  // Combine date and 12-hr EXIT time string
+  /*
+  ==========================
+  5️⃣ TIME CALCULATIONS
+  ==========================
+  */
   const combinedExitString = `${dateOfExit} ${timeOfExit}`;
-  // Parse using the 12-hr format
-  const dateFrom = moment.tz(combinedExitString, "YYYY-MM-DD h:mm A", 'Asia/Kolkata').toDate();
-
-  // <-- MODIFIED: Calculate dateTo from timeOfReturn ---
-  // Combine date and 12-hr RETURN time string
   const combinedReturnString = `${dateOfExit} ${timeOfReturn}`;
-  // Parse using the 12-hr format
-  const dateTo = moment.tz(combinedReturnString, "YYYY-MM-DD h:mm A", 'Asia/Kolkata').toDate();
-  
-  // --- MODIFIED: Improved Validation ---
-  
-  // Validate that exit time is not after return time
+
+  const dateFrom = moment
+    .tz(combinedExitString, "YYYY-MM-DD h:mm A", "Asia/Kolkata")
+    .toDate();
+
+  const dateTo = moment
+    .tz(combinedReturnString, "YYYY-MM-DD h:mm A", "Asia/Kolkata")
+    .toDate();
+
   if (moment(dateFrom).isAfter(dateTo)) {
-    res.status(400);
-    throw new Error('Exit time cannot be after the return time.');
+    throw new Error("Exit time cannot be after return time");
   }
 
-  // Get the end-of-college-day time (4:00 PM)
-  const endOfCollege = moment.tz(`${dateOfExit}T16:00:00.000`, 'Asia/Kolkata');
+  /*
+  ==========================
+  6️⃣ ML PREPROCESSING
+  ==========================
+  */
 
-  // Validate that return time is not after 4:00 PM
-  if (moment(dateTo).isAfter(endOfCollege)) {
-    res.status(400);
-    throw new Error('Return time cannot be after 4:00 PM.');
-  }
+  // --- A. Attendance Attainable Logic ---
+  const semesterStart = moment(student.class.semesterStartDate).tz("Asia/Kolkata");
+  const semesterEnd = moment(student.class.semesterEndDate).tz("Asia/Kolkata");
   
-  // Validate that exit time is not after 4:00 PM
-  if (moment(dateFrom).isAfter(endOfCollege)) {
-    res.status(400);
-    throw new Error('Exit time cannot be after 4:00 PM.');
+  const totalDaysInSemester = semesterEnd.diff(semesterStart, "days");
+  const daysPassedSoFar = now.diff(semesterStart, "days");
+  const daysRemaining = semesterEnd.diff(now, "days");
+
+ // Keep the raw percentage for the math calculations below
+  const raw_attendance_pct = student.attendancePercentage;
+  
+  // Convert to BINARY for the ML API
+  const attendance_pct = raw_attendance_pct >= 75 ? 1 : 0;
+  let attendance_attainable = 0;
+
+  if (totalDaysInSemester > 0) {
+    // Prevent negative days if semester hasn't started yet
+    const validPassedDays = Math.max(0, daysPassedSoFar);
+    const validRemainingDays = Math.max(0, daysRemaining);
+
+    // 🔴 FIXED: Use raw_attendance_pct here!
+    // Days they actually attended so far
+    const daysAttendedSoFar = (raw_attendance_pct / 100) * validPassedDays;
+
+    // Assuming they attend EVERY remaining day
+    const maxPossibleAttendedDays = daysAttendedSoFar + validRemainingDays;
+
+    // What would their final percentage be?
+    const maxPossiblePercentage = (maxPossibleAttendedDays / totalDaysInSemester) * 100;
+
+    attendance_attainable = maxPossiblePercentage >= 75 ? 1 : 0;
+    console.log("Max Possible:", maxPossiblePercentage, "Attainable:", attendance_attainable);
+  } else {
+    // Fallback if dates are improperly configured
+    attendance_attainable = raw_attendance_pct >= 75 ? 1 : 0;
   }
 
-  // --- 7. Create and Save Outpass ---
+  // --- B. Past Outpasses Logic ---
+  const pastMonth = moment().subtract(30, "days").toDate();
+
+  // Only count outpasses that were approved or physically exited
+  const pastOutpassesCount = await Outpass.countDocuments({
+    student: studentId,
+    status: { $in: ["approved", "exited"] },
+    createdAt: { $gte: pastMonth }
+  });
+
+  const past_outpasses_gt3 = pastOutpassesCount > 3 ? 1 : 0;
+
+  // --- C. Category Flags ---
+  const is_emergency = reasonCategory === "Emergency" ? 1 : 0;
+  const religious_exception = reasonCategory === "Religious" ? 1 : 0;
+
+  /*
+  ==========================
+  7️⃣ ML VALIDATION
+  ==========================
+  */
+  const mlResult = await validateOutpassWithML({
+    attendance_pct,
+    attendance_attainable,
+    past_outpasses_gt3,
+    is_emergency,
+    religious_exception,
+    reason,
+    reason_category: reasonCategory,
+    document_url: supportingDocumentUrl
+  });
+
+  const mlDecision = mlResult.decision;
+
+  /*
+  ==========================
+  8️⃣ REJECT CASE
+  ==========================
+  */
+  if (mlDecision === "REJECT") {
+    const outpass = await Outpass.create({
+      student: studentId,
+      reasonCategory,
+      reason,
+      dateFrom,
+      dateTo,
+      alternateContact,
+      supportingDocumentUrl,
+      attendanceAtApply: student.attendancePercentage,
+      status: "rejected",
+      mlDecision,
+      mlExplanation: mlResult.explanation,
+      mlFeatures: mlResult.features_used
+    });
+
+    return res.status(200).json({
+      message: "Outpass rejected automatically",
+      reason: mlResult.explanation
+    });
+  }
+
+  /*
+  ==========================
+  9️⃣ CREATE OUTPASS
+  ==========================
+  */
   const outpass = await Outpass.create({
     student: studentId,
     reasonCategory,
     reason,
-    dateFrom, // This is your "exit start time"
-    dateTo,   // This is your "exit end time"
-    alternateContact: alternateContact || undefined, // Avoid saving empty string
+    dateFrom,
+    dateTo,
+    alternateContact,
     supportingDocumentUrl,
     attendanceAtApply: student.attendancePercentage,
-    status: 'pending_faculty',
+
+    mlDecision,
+    mlExplanation: mlResult.explanation,
+    mlFeatures: mlResult.features_used,
+
+    status:
+      mlDecision === "AUTO_APPROVE"
+        ? "pending_parent"
+        : "pending_faculty"
   });
 
-  // --- 8. NEW: Find Targets and Trigger Notifications ---
-  
-  // Get the full student object (needed for finder)
-  const fullStudent = await Student.findById(studentId).populate('class');
-  
-  // Find who to notify
-  const targets = await getNotificationTargets(fullStudent, outpass);
+  /*
+  ==========================
+  🔟 SETUP TARGETS & SAVE
+  ==========================
+  */
+  const callTargets = [];
+  if (student.primaryParentPhone) callTargets.push({ phone: student.primaryParentPhone });
+  if (student.secondaryParentPhone) callTargets.push({ phone: student.secondaryParentPhone });
 
-  if (targets.length > 0) {
-    // Save who we are notifying
-    outpass.notifiedFaculty = targets.map(t => t._id);
-    await outpass.save();
+  outpass.parentVerification = {
+    status: "pending",
+    callTargets,
+    callAttempts: 1,
+    lastCallAt: new Date()
+  };
+  await outpass.save();
 
-    // Send notifications (async - don't wait for these to finish)
-    targets.forEach(faculty => {
-      sendNotificationEmail(faculty, fullStudent, outpass);
-      makeNotificationCall(faculty.phone);
-    });
-  } else {
-    console.warn(`No notification targets found for student ${student.name}.`);
-    // You might want to email the HOD by default here
-  }
+  /*
+  ==========================
+  11️⃣ TRIGGER NOTIFICATIONS
+  ==========================
+  */
+  // Fire and forget
+  initiateParentCalls(callTargets, outpass._id).catch(console.error);
+  notifyFacultyForOutpass(student, outpass).catch(console.error);
 
-  // --- 9. NEW: Schedule the 15-minute follow-up job ---
-  // (We will create 'agenda' in the next step)
-  try {
-    const { agenda } = req.app.locals; // Get agenda from app instance
-    await agenda.start();
-    await agenda.schedule('in 15 minutes', 'check outpass status', { 
-      outpassId: outpass._id.toString() 
-    });
-    console.log(`Scheduled 15-min check for outpass ${outpass._id}`);
-  } catch (err) {
-    console.error('Failed to schedule agenda job:', err);
-  }
+  /*
+  ==========================
+  RESPONSE
+  ==========================
+  */
+  res.status(201).json({
+    message: "Outpass request submitted",
+    status: outpass.status,
+    mlDecision
+  });
 
-  // Send response back to student
-  res.status(201).json(outpass);
 });
 /**
  * @desc    Get all outpasses for the logged-in student

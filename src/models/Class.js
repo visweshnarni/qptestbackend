@@ -20,7 +20,17 @@ const classSchema = mongoose.Schema({
     type: Number,
     required: true,
   },
-}, { timestamps: true });
+  semesterStartDate: {
+  type: Date,
+  required: true
+},
+
+semesterEndDate: {
+  type: Date,
+  required: true
+},
+},
+ { timestamps: true });
 
 const Class = mongoose.model('Class', classSchema);
 export default Class;

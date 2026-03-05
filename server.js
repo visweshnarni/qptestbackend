@@ -12,6 +12,9 @@ import connectDB from './src/config/db.js';
 
 // --- NEW: Import Agenda ---
 import agenda from './src/config/agenda.js';
+import parentIvrRoutes from './src/routes/parentIvrRoutes.js';
+
+
 
 // Import all the modular routes
 import authRoutes from './src/routes/authRoutes.js';
@@ -32,6 +35,7 @@ dotenv.config();
 
 // Create the Express app instance
 const app = express();
+app.use(express.urlencoded({ extended: true }));
 
 // --------------------
 // Middleware setup
@@ -57,6 +61,7 @@ app.use('/api/outpass', outpassRoutes);
 app.use('/api/faculty', facultyRoutes); // ✅ ADD THIS LINE
 
 app.use('/api/hod', hodRoutes);
+app.use("/api/parent-ivr", parentIvrRoutes);
 
 
 app.get('/', (req, res) => res.send('🎉 QuickPass API is Running!'));
