@@ -5,6 +5,8 @@ import Student from "../models/Student.js";
 import Class from "../models/Class.js";
 import Employee from "../models/Employee.js";
 import { makeNotificationCall } from "../utils/twilioService.js";
+// Add this import at the top of your controller
+import { notifyMentorAndHodOfAutoApproval } from "../services/faculty/facultyNotificationService.js";
 
 const VoiceResponse = twiml.VoiceResponse;
 
@@ -59,19 +61,28 @@ export const handleParentResponse = async (req, res) => {
   PRESS 1 → APPROVE
   */
 
-  if (digit === "1") {
+  
 
+// ... inside handleParentResponse() ...
+
+  /*
+  PRESS 1 → APPROVE
+  */
+  if (digit === "1") {
     outpass.parentVerification.status = "approved";
     outpass.parentVerification.verifiedBy = "ivr";
     outpass.parentVerification.verifiedAt = new Date();
 
     if (outpass.mlDecision === "AUTO_APPROVE") {
       outpass.status = "approved";
+      
+      // 🔥 Trigger the FYI emails in the background!
+      notifyMentorAndHodOfAutoApproval(outpass._id).catch(console.error);
     }
 
     await outpass.save();
 
-    response.say("Thank you.");
+    response.say("Thank you. The outpass has been approved.");
   }
 
   /*

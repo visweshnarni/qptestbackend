@@ -42,3 +42,30 @@ export const sendNotificationEmail = async (faculty, student, outpass) => {
     console.error(`Failed to send email to ${faculty.email}:`, error);
   }
 };
+// Add this below your existing sendNotificationEmail function
+
+/**
+ * Sends an FYI acknowledgment email to Mentor/HOD for auto-approved outpasses.
+ */
+export const sendAutoApprovalAcknowledgmentEmail = async (recipient, student, outpass) => {
+  try {
+    const mailOptions = {
+      from: `"QuickPass System" <${process.env.EMAIL_USER}>`,
+      to: recipient.email,
+      subject: `Outpass Auto-Approved: ${student.name}`,
+      html: `
+        <p>Hello ${recipient.name},</p>
+        <p>This is an automated notification. An outpass for <b>${student.name}</b> (${student.rollNumber || ''}) has been <b>auto-approved</b> by the ML system and confirmed by their parent.</p>
+        <p><b>Reason:</b> ${outpass.reason} (${outpass.reasonCategory})</p>
+        <p><b>Time:</b> ${moment(outpass.dateFrom).tz('Asia/Kolkata').format('h:mm A')} to ${moment(outpass.dateTo).tz('Asia/Kolkata').format('h:mm A')}</p>
+        <p><i>No further action is required from your end. This is strictly for your records.</i></p>
+        <p>Thank you.</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`Auto-approval acknowledgment email sent to ${recipient.email}`);
+  } catch (error) {
+    console.error(`Failed to send acknowledgment email to ${recipient.email}:`, error);
+  }
+};
