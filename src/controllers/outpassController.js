@@ -626,17 +626,22 @@ export const getOutpassHistory = asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const { status, month, year, sort } = req.query;
 
-  // 🔹 Base filter (exclude active pending)
+  // 🔹 Base filter: Exclude all active pending states
+  const pendingStates = ['pending_ml', 'pending_parent', 'pending_faculty', 'pending_hod'];
   const query = {
     student: studentId,
-    status: { $nin: ['pending_faculty', 'pending_hod'] },
+    status: { $nin: pendingStates },
   };
 
   // 🔹 Status filtering
   if (status && status !== "all") {
-    if (status === "cancelled") query.status = "cancelled_by_student";
-    else if (["approved", "rejected"].includes(status)) {
-      query.status = status;
+    if (status === "cancelled") {
+      query.status = "cancelled_by_student";
+    } else if (status === "approved") {
+      // Include both 'approved' and 'exited' as successful requests
+      query.status = { $in: ["approved", "exited"] };
+    } else if (status === "rejected") {
+      query.status = "rejected";
     }
   }
 
@@ -658,10 +663,10 @@ export const getOutpassHistory = asyncHandler(async (req, res) => {
     .populate('hodApprover', 'name')
     .populate('assignedMentor', 'name');
 
-  // 🔹 Count summary (excluding pending)
+  // 🔹 Count summary
   const [total, approved, rejected, cancelled] = await Promise.all([
-    Outpass.countDocuments({ student: studentId, status: { $nin: ['pending_faculty', 'pending_hod'] } }),
-    Outpass.countDocuments({ student: studentId, status: 'approved' }),
+    Outpass.countDocuments({ student: studentId, status: { $nin: pendingStates } }),
+    Outpass.countDocuments({ student: studentId, status: { $in: ['approved', 'exited'] } }),
     Outpass.countDocuments({ student: studentId, status: 'rejected' }),
     Outpass.countDocuments({ student: studentId, status: 'cancelled_by_student' }),
   ]);
@@ -671,6 +676,7 @@ export const getOutpassHistory = asyncHandler(async (req, res) => {
     requestId: o._id,
     reasonCategory: o.reasonCategory,
     reason: o.reason,
+    // Map backend exact states to frontend-friendly labels
     status: o.status === "cancelled_by_student" ? "cancelled" : o.status,
     exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
     returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('h:mm A'),
