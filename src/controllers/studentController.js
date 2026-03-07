@@ -15,33 +15,37 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
   // We'll run 3 queries in parallel for efficiency
   
   // 1. Get Student Profile
-  // We populate 'class' and then the 'department' *within* 'class'
   const studentProfileQuery = Student.findById(req.user.id)
     .select('-password')
     .populate({
       path: 'class',
       populate: {
         path: 'department',
-        select: 'name', // We only need the department's name
+        select: 'name', 
       },
-      select: 'name year department', // Select fields from Class
+      select: 'name year department', 
     });
 
   // 2. Get Current "Active" Outpass
-  // Find one outpass that is not yet completed
+  // Includes all pending states and 'approved' (ready for exit)
   const currentOutpassQuery = Outpass.findOne({
     student: req.user.id,
-    status: { $in: ['pending_faculty', 'pending_hod', 'approved'] },
-  }).sort({ updatedAt: -1 }); // Get the most recent one
+    status: { $in: ['pending_ml', 'pending_parent', 'pending_faculty', 'pending_hod', 'approved'] },
+  })
+  .populate('facultyApprover', 'name')
+  .populate('hodApprover', 'name')
+  .sort({ updatedAt: -1 }); 
 
   // 3. Get Recent Activity (History)
-  // Find the last 5 *completed* (approved or rejected) outpasses
+  // Includes all terminal states
   const recentActivityQuery = Outpass.find({
     student: req.user.id,
-    status: { $in: ['approved', 'rejected'] },
+    status: { $in: ['exited', 'rejected', 'cancelled_by_student'] },
   })
-    .sort({ createdAt: -1 }) // Get the newest first
-    .limit(5); // Only get the last 5
+    .populate('facultyApprover', 'name')
+    .populate('hodApprover', 'name')
+    .sort({ createdAt: -1 }) 
+    .limit(5); 
 
   // Run all queries
   const [student, currentOutpass, recentActivity] = await Promise.all([
@@ -56,8 +60,6 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
   }
 
   // --- Normalize Data for Frontend ---
-  // We create a new object that matches your `StudentProfile` interface exactly,
-  // flattening the populated 'class' and 'department' data.
   const normalizedProfile = {
     _id: student._id,
     name: student.name,
@@ -65,30 +67,44 @@ export const getStudentProfile = asyncHandler(async (req, res) => {
     rollNumber: student.rollNumber,
     phone: student.phone,
     parentName: student.parentName,
-    parentPhone: student.primaryParentPhone, // Matches frontend `parentPhone`
-    parentPhone2: student.secondaryParentPhone, // Matches frontend `parentPhone2`
+    parentPhone: student.primaryParentPhone, 
+    parentPhone2: student.secondaryParentPhone, 
     attendancePercentage: student.attendancePercentage,
     
     // Flatten data from the populated 'class' object
     department: student.class?.department?.name || 'N/A',
     year: student.class?.year || 0,
     
-    // Other fields your frontend interface expects
-    profilePhoto: student.profilePhoto || undefined, // (if you add this to your model)
-    isActive: student.isActive || true,          // (if you add this)
-    dateOfBirth: student.dateOfBirth || undefined, // (if you add this)
-    bloodGroup: student.bloodGroup || undefined,   // (if you- add this)
-    address: student.address || undefined,       // (if you add this)
+    profilePhoto: student.profilePhoto || undefined, 
+    isActive: student.isActive !== false, 
+    dateOfBirth: student.dateOfBirth || undefined, 
+    bloodGroup: student.bloodGroup || undefined,  
+    address: student.address || undefined,       
+  };
+
+  // Helper function to format outpasses for the frontend interface
+  const formatOutpass = (outpass) => {
+    if (!outpass) return null;
+    return {
+      _id: outpass._id,
+      status: outpass.status,
+      reason: outpass.reason,
+      dateFrom: outpass.dateFrom,
+      dateTo: outpass.dateTo,
+      // Map the approver references to the structure the frontend expects
+      facultyApproval: outpass.facultyApprover ? { status: 'approved' } : undefined,
+      hodApproval: outpass.hodApprover ? { status: 'approved' } : undefined,
+      createdAt: outpass.createdAt,
+    };
   };
 
   // Send the combined response
   res.status(200).json({
     profile: normalizedProfile,
-    currentOutpass: currentOutpass || null, // Send the single object or null
-    recentActivity: recentActivity,         // Send the array of recent passes
+    currentOutpass: formatOutpass(currentOutpass), 
+    recentActivity: recentActivity.map(formatOutpass), 
   });
 });
-
 /**
  * @desc    Get student details for the outpass application form
  * @route   GET /api/student/apply-details
