@@ -4,7 +4,6 @@ import Outpass from '../models/Outpass.js';
 import Student from '../models/Student.js';
 import Employee from '../models/Employee.js';
 import Class from '../models/Class.js';
-import { notifyPendingHodRequests } from '../utils/hodNotification/hodNotificationService.js';
 
 /**
  * @desc Faculty or Mentor Dashboard
@@ -33,15 +32,11 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
   const isMentor = !!mentorClass;
 
   // --- 3️⃣ Count students ---
-  // Get all classes under this faculty’s department
   const departmentClasses = await Class.find({ department: faculty.department._id }).select('_id');
-
-  // Count all students in that department
   const deptStudentCount = await Student.countDocuments({
     class: { $in: departmentClasses.map(c => c._id) },
   });
 
-  // Count students under this mentor’s class (if applicable)
   let classStudentCount = 0;
   if (isMentor) {
     classStudentCount = await Student.countDocuments({ class: mentorClass._id });
@@ -49,12 +44,13 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
 
   // --- 4️⃣ Outpass statistics (faculty-specific) ---
   const [pendingRequests, approvedRequests, rejectedRequests] = await Promise.all([
+    // Include both pending_faculty and pending_parent so they see the full active pipeline
     Outpass.countDocuments({
-      status: 'pending_faculty',
+      status: { $in: ['pending_faculty', 'pending_parent'] },
       notifiedFaculty: { $in: [facultyId] },
     }),
     Outpass.countDocuments({
-      status: 'approved',
+      status: { $in: ['approved', 'exited', 'pending_hod'] }, // If it reached HOD or beyond, faculty approved it
       facultyApprover: facultyId,
     }),
     Outpass.countDocuments({
@@ -64,14 +60,13 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
   ]);
 
   // --- 5️⃣ Query recent pending requests ---
-  const query = { status: 'pending_faculty' };
+  // Allow faculty to see requests currently waiting on parents too
+  const query = { status: { $in: ['pending_faculty', 'pending_parent'] } };
 
   if (sort === 'myclass' && isMentor) {
-    // Mentor’s class only
     const classStudents = await Student.find({ class: mentorClass._id }).select('_id');
     query.student = { $in: classStudents.map(s => s._id) };
   } else {
-    // Default → department-level
     const deptStudents = await Student.find({
       class: { $in: departmentClasses.map(c => c._id) },
     }).select('_id');
@@ -107,12 +102,14 @@ export const getFacultyDashboard = asyncHandler(async (req, res) => {
     returnTime: moment(r.dateTo).tz('Asia/Kolkata').format('h:mm A'),
     requestedAt: moment(r.createdAt).tz('Asia/Kolkata').fromNow(),
     status: r.status,
+    mlDecision: r.mlDecision, // Pass ML decision to UI
+    parentVerified: r.parentVerification?.status === 'approved' // Use new parent schema
   }));
 
   // --- 6️⃣ Urgent alerts (Emergency requests) ---
   const urgentRequests = await Outpass.find({
     reasonCategory: { $regex: /^emergency$/i },
-    status: { $in: ['pending_faculty', 'pending_hod'] },
+    status: { $in: ['pending_parent', 'pending_faculty'] },
   })
     .populate({
       path: 'student',
@@ -168,7 +165,8 @@ export const getPendingRequests = asyncHandler(async (req, res) => {
   const mentorClass = await Class.findOne({ mentors: facultyId }).populate('department', 'name').lean();
   const isMentor = !!mentorClass;
 
-  const query = { status: 'pending_faculty' };
+  // Include pending_parent so faculty can intervene or monitor automated calls
+  const query = { status: { $in: ['pending_faculty', 'pending_parent'] } };
   if (filter === 'myclass' && isMentor) {
     const classStudents = await Student.find({ class: mentorClass._id }).select('_id');
     query.student = { $in: classStudents.map(s => s._id) };
@@ -210,7 +208,13 @@ export const getPendingRequests = asyncHandler(async (req, res) => {
     returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('h:mm A'),
     requestedAt: moment(o.createdAt).tz('Asia/Kolkata').fromNow(),
     isEmergency: /^emergency$/i.test(o.reasonCategory),
-    parentVerified: o.parentContactVerified?.status || false,
+    
+    // Updated to handle the new ML and Parent schemas
+    status: o.status,
+    mlDecision: o.mlDecision,
+    mlExplanation: o.mlExplanation,
+    parentVerificationStatus: o.parentVerification?.status || 'pending', // pending | approved | rejected | no_response
+    parentVerifiedBy: o.parentVerification?.verifiedBy || null // ivr | faculty
   }));
 
   const pendingCount = formattedList.length;
@@ -231,26 +235,33 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
   const { action, rejectionReason, parentVerified } = req.body;
 
   const outpass = await Outpass.findById(id).populate('student', 'attendancePercentage');
+  
   if (!outpass) throw new Error('Outpass not found');
-  if (outpass.status !== 'pending_faculty')
-    throw new Error('Outpass is not pending faculty approval.');
+  
+  // ✅ Allow faculty to intervene if it is pending_faculty OR stuck at pending_parent
+  if (!['pending_faculty', 'pending_parent'].includes(outpass.status)) {
+    throw new Error(`Outpass cannot be modified in its current state: ${outpass.status}`);
+  }
 
-  // Manual parent verification (if low attendance)
+  // ✅ Manual parent verification: If the faculty checked the box, override the IVR
   if (parentVerified) {
-    outpass.parentContactVerified = {
-      status: true,
-      by: facultyId,
-      at: new Date(),
+    outpass.parentVerification = {
+      status: 'approved',
+      verifiedBy: 'faculty', // Marks that the faculty did this manually, not the bot
+      verifiedAt: new Date(),
+      // Preserve existing call data if the bot tried earlier
+      callAttempts: outpass.parentVerification?.callAttempts || 0,
+      callTargets: outpass.parentVerification?.callTargets || []
     };
   }
 
- if (action === 'approve') {
-  outpass.status = 'pending_hod';
-  outpass.facultyApprover = facultyId;
+  if (action === 'approve') {
+    outpass.status = 'pending_hod';
+    outpass.facultyApprover = facultyId;
 
-  // ✅ Trigger initial notification to HOD immediately
-  notifyPendingHodRequests();  // async trigger, non-blocking
-}else if (action === 'reject') {
+    // Trigger initial notification to HOD immediately
+    notifyPendingHodRequests().catch(console.error);  // Added .catch to prevent unhandled rejections
+  } else if (action === 'reject') {
     outpass.status = 'rejected';
     outpass.facultyApprover = facultyId;
     outpass.rejectionReason = rejectionReason || 'Rejected by faculty';
