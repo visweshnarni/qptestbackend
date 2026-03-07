@@ -202,19 +202,23 @@ export const getPendingRequests = asyncHandler(async (req, res) => {
     attendanceAtApply: o.attendanceAtApply,
     lowAttendance: o.attendanceAtApply < 75,
     parentName: o.student?.parentName,
+    
+    // ✅ Make sure all 3 phone numbers are explicitly passed down
     parentContact: o.student?.primaryParentPhone,
-    alternateContact: o.alternateContact || o.student?.secondaryParentPhone || null,
+    secondaryParentContact: o.student?.secondaryParentPhone || null,
+    alternateContact: o.alternateContact || null,
+    
     exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
     returnTime: moment(o.dateTo).tz('Asia/Kolkata').format('h:mm A'),
     requestedAt: moment(o.createdAt).tz('Asia/Kolkata').fromNow(),
     isEmergency: /^emergency$/i.test(o.reasonCategory),
     
-    // Updated to handle the new ML and Parent schemas
+    // Status tracking
     status: o.status,
     mlDecision: o.mlDecision,
     mlExplanation: o.mlExplanation,
-    parentVerificationStatus: o.parentVerification?.status || 'pending', // pending | approved | rejected | no_response
-    parentVerifiedBy: o.parentVerification?.verifiedBy || null // ivr | faculty
+    parentVerificationStatus: o.parentVerification?.status || 'pending', 
+    parentVerifiedBy: o.parentVerification?.verifiedBy || null 
   }));
 
   const pendingCount = formattedList.length;
