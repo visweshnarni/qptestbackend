@@ -57,12 +57,7 @@ export const generateQrToken = asyncHandler(async (req, res) => {
 
   // 4. Generate the JWT Payload
   const qrPayload = {
-    outpassId: outpass._id,
-    studentId: studentId,
-    rollNumber: outpass.student.rollNumber,
-    name: outpass.student.name,
-    generatedAtLoc: { lat: latitude, lng: longitude },
-    type: 'gatepass_exit'
+    outpassId: outpass._id
   };
 
   // 5. Sign the Token with expiration
