@@ -13,6 +13,7 @@ import connectDB from './src/config/db.js';
 // --- NEW: Import Agenda ---
 import agenda from './src/config/agenda.js';
 import parentIvrRoutes from './src/routes/parentIvrRoutes.js';
+import qrRoutes from './src/routes/qrRoutes.js'; // ✅ ADD THIS LINE
 
 
 
@@ -62,6 +63,9 @@ app.use('/api/faculty', facultyRoutes); // ✅ ADD THIS LINE
 
 app.use('/api/hod', hodRoutes);
 app.use("/api/parent-ivr", parentIvrRoutes);
+
+app.use("/api/qr", qrRoutes); // ✅ ADD THIS LINE
+
 
 
 app.get('/', (req, res) => res.send('🎉 QuickPass API is Running!'));

@@ -27,6 +27,11 @@ const collegeConfigSchema = mongoose.Schema({
   parentCallRetryMinutes: {
     type: Number,
     default: 15
+  },
+  // Add this inside your schema
+  qrValidityMinutes: {
+    type: Number,
+    default: 5
   }
 
 }, { timestamps: true });
