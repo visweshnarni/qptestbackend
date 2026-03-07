@@ -6,6 +6,7 @@ import { protect, authorize } from '../middlewares/authMiddleware.js';
 import { getPendingHodApprovals, handleHodApproval } from '../controllers/hodController.js';
 import { getHodReports } from '../controllers/hodController.js';
 import { getHodHistory } from '../controllers/hodController.js';
+import { bulkApproveOutpasses } from '../controllers/hodController.js';
 
 const router = express.Router();
 
@@ -32,6 +33,8 @@ router.get('/pending-approvals', protect, authorize('hod'), getPendingHodApprova
  * @desc    Approve or reject an outpass by HOD
  */
 router.put('/outpass/:id/action', protect, authorize('hod'), handleHodApproval);
+// ✅ PUT THIS LINE ABOVE THE INDIVIDUAL ACTION ROUTE
+router.put('/outpass/bulk-approve', protect, authorize('hod'), bulkApproveOutpasses);
 /**
  * @route   GET /api/hod/reports
  * @desc    Get department-level reports (HOD)

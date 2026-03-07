@@ -5,6 +5,8 @@ import Student from '../models/Student.js';
 import Employee from '../models/Employee.js';
 import Class from '../models/Class.js';
 
+
+
 /**
  * @desc HOD Dashboard — Department-level summary, pending approvals, parent verifications
  * @route GET /api/hod/dashboard
@@ -39,7 +41,7 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
   const [pendingApprovals, approvedToday, rejectedToday] = await Promise.all([
     Outpass.countDocuments({ status: 'pending_hod' }),
     Outpass.countDocuments({
-      status: 'approved',
+      status: { $in: ['approved', 'exited'] }, // ✅ Include exited as approved
       hodApprover: hodId,
       updatedAt: { $gte: moment().startOf('day'), $lte: moment().endOf('day') },
     }),
@@ -64,7 +66,6 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
       },
     })
     .populate('facultyApprover', 'name')
-    .populate('parentContactVerified.by', 'name role') // ✅ Populate who verified
     .lean();
 
   const formattedPending = pendingRequests.map(req => ({
@@ -78,20 +79,22 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
     teacherApprover: req.facultyApprover?.name || 'Pending Faculty',
     parentContact: req.student?.primaryParentPhone,
     attendanceAtApply: req.attendanceAtApply,
-    attendanceStatus:
-      req.attendanceAtApply < 75 ? 'Low Attendance' : 'Normal',
+    attendanceStatus: req.attendanceAtApply < 75 ? 'Low Attendance' : 'Normal',
     exitTime: moment(req.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
     returnTime: moment(req.dateTo).tz('Asia/Kolkata').format('h:mm A'),
     requestedAt: moment(req.createdAt).tz('Asia/Kolkata').fromNow(),
     urgency: /^emergency$/i.test(req.reasonCategory) ? 'HIGH' : 'NORMAL',
+    
+    // ✅ Pass the new ML Decisions to the HOD
+    mlDecision: req.mlDecision,
+    mlExplanation: req.mlExplanation,
 
-    // ✅ Parent Verification Info
+    // ✅ Map the new Parent Verification schema
     parentVerification: {
-      status: req.parentContactVerified?.status || false,
-      verifiedBy: req.parentContactVerified?.by?.name || null,
-      verifierRole: req.parentContactVerified?.by?.role || null,
-      verifiedAt: req.parentContactVerified?.at
-        ? moment(req.parentContactVerified.at).tz('Asia/Kolkata').format('DD MMM, h:mm A')
+      status: req.parentVerification?.status === 'approved',
+      verifiedBy: req.parentVerification?.verifiedBy || 'system', // ivr or faculty
+      verifiedAt: req.parentVerification?.verifiedAt
+        ? moment(req.parentVerification.verifiedAt).tz('Asia/Kolkata').format('DD MMM, h:mm A')
         : null,
     },
   }));
@@ -108,7 +111,6 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
       select: 'name rollNumber class',
       populate: { path: 'class', select: 'name' },
     })
-    .populate('parentContactVerified.by', 'name')
     .lean();
 
   const formattedUrgentAlerts = urgentAlerts.map(a => ({
@@ -116,7 +118,7 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
     message: `Emergency outpass from ${a.student?.name} (${a.student?.rollNumber})`,
     class: a.student?.class?.name,
     timeAgo: moment(a.createdAt).tz('Asia/Kolkata').fromNow(),
-    parentVerified: a.parentContactVerified?.status || false, // ✅ Quick check for alert cards
+    parentVerified: a.parentVerification?.status === 'approved', // ✅ Mapped to new schema
   }));
 
   // 8️⃣ Final Response
@@ -140,7 +142,6 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
   });
 });
 
-
 /* --------------------------------------------
    GET HOD PENDING APPROVALS
    -------------------------------------------- */
@@ -152,7 +153,7 @@ export const getHodDashboard = asyncHandler(async (req, res) => {
  */
 export const getPendingHodApprovals = asyncHandler(async (req, res) => {
   const hodId = req.user.id;
-  const { category } = req.query; // ?category=Emergency
+  const { category } = req.query; 
 
   // 1️⃣ Validate HOD
   const hod = await Employee.findById(hodId).populate('department', 'name').lean();
@@ -166,7 +167,7 @@ export const getPendingHodApprovals = asyncHandler(async (req, res) => {
   const query = { status: 'pending_hod' };
   query['student'] = { $exists: true };
 
-  if (category) {
+  if (category && category !== 'all') {
     query.reasonCategory = { $regex: new RegExp(`^${category}$`, 'i') };
   }
 
@@ -175,7 +176,7 @@ export const getPendingHodApprovals = asyncHandler(async (req, res) => {
     .populate({
       path: 'student',
       match: { class: { $in: classIds } },
-      select: 'name rollNumber attendancePercentage class',
+      select: 'name rollNumber attendancePercentage class primaryParentPhone',
       populate: {
         path: 'class',
         select: 'name department',
@@ -189,7 +190,7 @@ export const getPendingHodApprovals = asyncHandler(async (req, res) => {
   // Filter outpasses belonging to other departments
   const deptOutpasses = outpasses.filter(o => o.student);
 
-  if (category && deptOutpasses.length === 0) {
+  if (category && category !== 'all' && deptOutpasses.length === 0) {
     return res.status(404).json({ message: `No pending outpasses found for category "${category}"` });
   }
 
@@ -204,6 +205,7 @@ export const getPendingHodApprovals = asyncHandler(async (req, res) => {
     facultyApprovedAt: o.updatedAt ? moment(o.updatedAt).tz('Asia/Kolkata').fromNow() : null,
     attendanceAtApply: o.attendanceAtApply,
     attendanceStatus: o.attendanceAtApply < 75 ? 'Low Attendance' : 'Normal',
+    parentContact: o.student?.primaryParentPhone,
     reasonCategory: o.reasonCategory,
     reason: o.reason,
     exitTime: moment(o.dateFrom).tz('Asia/Kolkata').format('h:mm A'),
@@ -211,6 +213,17 @@ export const getPendingHodApprovals = asyncHandler(async (req, res) => {
     requestedAgo: moment(o.createdAt).tz('Asia/Kolkata').fromNow(),
     timeInHodQueue: moment(o.updatedAt || o.createdAt).tz('Asia/Kolkata').fromNow(),
     isEmergency: /^emergency$/i.test(o.reasonCategory),
+
+    // ✅ New Fields for ML and Parent Verification
+    mlDecision: o.mlDecision,
+    mlExplanation: o.mlExplanation,
+    parentVerification: {
+      status: o.parentVerification?.status === 'approved',
+      verifiedBy: o.parentVerification?.verifiedBy || 'system',
+      verifiedAt: o.parentVerification?.verifiedAt
+        ? moment(o.parentVerification.verifiedAt).tz('Asia/Kolkata').format('DD MMM, h:mm A')
+        : null,
+    },
   }));
 
   const totalPending = formattedList.length;
@@ -225,7 +238,6 @@ export const getPendingHodApprovals = asyncHandler(async (req, res) => {
     requests: formattedList,
   });
 });
-
 /* --------------------------------------------
    HOD APPROVE / REJECT OUTPASS
    -------------------------------------------- */
@@ -268,6 +280,39 @@ export const handleHodApproval = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * @desc Bulk approve outpass requests by HOD
+ * @route PUT /api/hod/outpass/bulk-approve
+ * @access Private (HOD)
+ */
+export const bulkApproveOutpasses = asyncHandler(async (req, res) => {
+  const hodId = req.user.id;
+  const { requestIds } = req.body;
+
+  if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
+    return res.status(400).json({ message: 'No request IDs provided for bulk approval.' });
+  }
+
+  // Update all matching outpasses that are currently pending HOD approval
+  const result = await Outpass.updateMany(
+    {
+      _id: { $in: requestIds },
+      status: 'pending_hod'
+    },
+    {
+      $set: {
+        status: 'approved',
+        hodApprover: hodId,
+      }
+    }
+  );
+
+  res.status(200).json({
+    message: `Successfully approved ${result.modifiedCount} outpass requests.`,
+    approvedCount: result.modifiedCount
+  });
+});
+
 /* --------------------------------------------
    HOD DEPARTMENT REPORTS
    -------------------------------------------- */
@@ -301,11 +346,12 @@ export const getHodReports = asyncHandler(async (req, res) => {
   // 3️⃣ Time range filter (if this_month)
   const dateFilter = {};
   if (range === 'this_month') {
-    const startOfMonth = moment().startOf('month').toDate();
+    // ✅ ADDED .tz('Asia/Kolkata') to ensure accurate month boundaries for India
+    const startOfMonth = moment().tz('Asia/Kolkata').startOf('month').toDate();
     dateFilter.createdAt = { $gte: startOfMonth };
   }
 
-  // 4️⃣ Fetch all department outpasses (approved, rejected)
+  // 4️⃣ Fetch all department outpasses
   const departmentOutpasses = await Outpass.find({
     facultyApprover: { $in: facultyIds },
     ...dateFilter,
@@ -314,11 +360,15 @@ export const getHodReports = asyncHandler(async (req, res) => {
     .lean();
 
   const totalRequests = departmentOutpasses.length;
-  const approvedCount = departmentOutpasses.filter(o => o.status === 'approved').length;
+  // ✅ Include both 'approved' and 'exited' as successful approvals
+  const approvedCount = departmentOutpasses.filter(o => ['approved', 'exited'].includes(o.status)).length;
   const rejectedCount = departmentOutpasses.filter(o => o.status === 'rejected').length;
 
   // 5️⃣ Calculate average approval time
-  const approvedOutpasses = departmentOutpasses.filter(o => o.status === 'approved' && o.createdAt && o.updatedAt);
+  const approvedOutpasses = departmentOutpasses.filter(
+    o => ['approved', 'exited'].includes(o.status) && o.createdAt && o.updatedAt
+  );
+  
   const avgApprovalTimeMins =
     approvedOutpasses.length > 0
       ? Math.round(
@@ -331,7 +381,8 @@ export const getHodReports = asyncHandler(async (req, res) => {
   const performance = facultyList.map(fac => {
     const fOutpasses = departmentOutpasses.filter(o => o.facultyApprover?._id?.toString() === fac._id.toString());
     const total = fOutpasses.length;
-    const approved = fOutpasses.filter(o => o.status === 'approved').length;
+    // ✅ Include both 'approved' and 'exited' for individual faculty stats
+    const approved = fOutpasses.filter(o => ['approved', 'exited'].includes(o.status)).length;
     const rejected = fOutpasses.filter(o => o.status === 'rejected').length;
     const approvalRate = total > 0 ? Math.round((approved / total) * 100) : 0;
 

@@ -4,7 +4,8 @@ import Outpass from '../models/Outpass.js';
 import Student from '../models/Student.js';
 import Employee from '../models/Employee.js';
 import Class from '../models/Class.js';
-
+import { notifyPendingHodRequests } from '../utils/hodNotification/hodNotificationService.js';  
+import { sendAutoApprovalAcknowledgmentEmail } from '../utils/emailService.js'; 
 /**
  * @desc Faculty or Mentor Dashboard
  * @route GET /api/faculty/dashboard
@@ -238,7 +239,8 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { action, rejectionReason, parentVerified } = req.body;
 
-  const outpass = await Outpass.findById(id).populate('student', 'attendancePercentage');
+  // Add name and rollNumber to populate for the email later
+  const outpass = await Outpass.findById(id).populate('student', 'name rollNumber attendancePercentage');
   
   if (!outpass) throw new Error('Outpass not found');
   
@@ -260,11 +262,36 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
   }
 
   if (action === 'approve') {
-    outpass.status = 'pending_hod';
     outpass.facultyApprover = facultyId;
 
-    // Trigger initial notification to HOD immediately
-    notifyPendingHodRequests().catch(console.error);  // Added .catch to prevent unhandled rejections
+    // ✅ NEW: Check if ML already determined this was safe for Auto-Approval
+    if (outpass.mlDecision === 'AUTO_APPROVE') {
+      outpass.status = 'approved'; // Bypass HOD entirely!
+
+      // Fetch the HOD's details to send the FYI acknowledgment email
+      const studentData = await Student.findById(outpass.student._id)
+        .populate({
+          path: 'class',
+          populate: {
+            path: 'department',
+            populate: { path: 'hod' } // Gets the actual HOD employee object
+          }
+        });
+
+      const hod = studentData?.class?.department?.hod;
+
+      if (hod) {
+        // Send the FYI email (fire and forget, don't await so we don't block the response)
+        sendAutoApprovalAcknowledgmentEmail(hod, outpass.student, outpass).catch(console.error);
+      }
+
+    } else {
+      // ❌ ML determined MANUAL_VERIFY (e.g. low attendance, vague reason)
+      // Standard workflow: push to HOD for final approval
+      outpass.status = 'pending_hod';
+      notifyPendingHodRequests().catch(console.error);
+    }
+
   } else if (action === 'reject') {
     outpass.status = 'rejected';
     outpass.facultyApprover = facultyId;
@@ -276,7 +303,11 @@ export const handleFacultyApproval = asyncHandler(async (req, res) => {
   await outpass.save();
 
   res.status(200).json({
-    message: `Outpass ${action === 'approve' ? 'approved and sent to HOD' : 'rejected'} successfully.`,
+    message: `Outpass ${
+      action === 'approve' 
+        ? (outpass.status === 'approved' ? 'auto-approved and HOD notified' : 'approved and sent to HOD') 
+        : 'rejected'
+    } successfully.`,
     outpassId: outpass._id,
     status: outpass.status,
   });
