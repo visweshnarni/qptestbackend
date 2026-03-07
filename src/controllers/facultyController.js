@@ -470,10 +470,10 @@ export const getFacultyClasses = asyncHandler(async (req, res) => {
  * @access  Private (Faculty, HOD, Mentor)
  *
  * Notes:
- *  - "history" = past/finished outpasses, so we EXCLUDE statuses pending_faculty and pending_hod from summary counts
- *  - Supports filters: status, approvedByMe, rejectedByMe, studentRoll, class (name), myclass (mentor)
- *  - Pagination: page, limit
- *  - Sorting: sort= newest | oldest (default newest)
+ * - "history" = past/finished outpasses, so we EXCLUDE statuses pending_ml, pending_parent, pending_faculty and pending_hod from summary counts
+ * - Supports filters: status, approvedByMe, rejectedByMe, studentRoll, class (name), myclass (mentor)
+ * - Pagination: page, limit
+ * - Sorting: sort= newest | oldest (default newest)
  */
 export const getFacultyHistory = asyncHandler(async (req, res) => {
   const facultyId = req.user.id;
@@ -499,18 +499,14 @@ export const getFacultyHistory = asyncHandler(async (req, res) => {
   const isMentor = !!mentorClass;
 
   // 2. build base student list that faculty can view
-  // If myclass requested and faculty is mentor -> restrict to that class
-  // Else use department classes
   let studentIdsForScope = [];
   if (myclass === 'true' || myclass === '1') {
     if (!isMentor) {
-      // no access to myclass filter if not a mentor
       return res.status(403).json({ message: 'Not a mentor / no myclass access.' });
     }
     const classStudents = await Student.find({ class: mentorClass._id }).select('_id').lean();
     studentIdsForScope = classStudents.map(s => s._id);
   } else if (className) {
-    // find class by name under faculty department
     const cls = await Class.findOne({ name: className, department: faculty.department._id }).select('_id').lean();
     if (!cls) {
       return res.status(200).json({ summary: {}, count: 0, outpasses: [] });
@@ -518,22 +514,28 @@ export const getFacultyHistory = asyncHandler(async (req, res) => {
     const classStudents = await Student.find({ class: cls._id }).select('_id').lean();
     studentIdsForScope = classStudents.map(s => s._id);
   } else {
-    // department-wide
     const deptClasses = await Class.find({ department: faculty.department._id }).select('_id').lean();
     const deptStudents = await Student.find({ class: { $in: deptClasses.map(c => c._id) } }).select('_id').lean();
     studentIdsForScope = deptStudents.map(s => s._id);
   }
 
-  // 3. base query for history: exclude pending statuses (these are 'currently processing')
+  // 3. base query for history: exclude ALL pending statuses
+  const pendingStates = ['pending_ml', 'pending_parent', 'pending_faculty', 'pending_hod'];
   const baseQuery = {
     student: { $in: studentIdsForScope },
-    status: { $nin: ['pending_faculty', 'pending_hod'] }
+    status: { $nin: pendingStates }
   };
 
   // 4. apply status filter if provided
   if (status && status !== 'all') {
-    if (status === 'cancelled') baseQuery.status = 'cancelled_by_student';
-    else baseQuery.status = status; // 'approved' | 'rejected'
+    if (status === 'cancelled') {
+      baseQuery.status = 'cancelled_by_student';
+    } else if (status === 'approved') {
+      // ✅ Combine 'approved' and 'exited' when filtering for successful passes
+      baseQuery.status = { $in: ['approved', 'exited'] };
+    } else {
+      baseQuery.status = status; // 'rejected'
+    }
   }
 
   // 5. studentRoll filter
@@ -542,7 +544,6 @@ export const getFacultyHistory = asyncHandler(async (req, res) => {
     if (!student) {
       return res.status(200).json({ summary: {}, count: 0, outpasses: [] });
     }
-    // ensure requested student is within faculty scope
     if (!studentIdsForScope.map(String).includes(String(student._id))) {
       return res.status(403).json({ message: 'You do not have access to this student history.' });
     }
@@ -552,7 +553,8 @@ export const getFacultyHistory = asyncHandler(async (req, res) => {
   // 6. approvedByMe / rejectedByMe flags
   if (approvedByMe === 'true' || approvedByMe === '1') {
     baseQuery.facultyApprover = facultyId;
-    baseQuery.status = 'approved';
+    // If they filtered by "approvedByMe", it could be in either of these states now
+    baseQuery.status = { $in: ['approved', 'exited', 'pending_hod'] }; 
   }
   if (rejectedByMe === 'true' || rejectedByMe === '1') {
     baseQuery.facultyApprover = facultyId;
@@ -560,11 +562,12 @@ export const getFacultyHistory = asyncHandler(async (req, res) => {
   }
 
   // 7. counts (summary) for department/class scope (exclude pending)
-  const countBase = { student: { $in: studentIdsForScope }, status: { $nin: ['pending_faculty', 'pending_hod'] } };
+  const countBase = { student: { $in: studentIdsForScope }, status: { $nin: pendingStates } };
 
   const [ total, approved, rejected, cancelled ] = await Promise.all([
     Outpass.countDocuments(countBase),
-    Outpass.countDocuments({ ...countBase, status: 'approved' }),
+    // ✅ Count both approved and exited as "Approved" in the UI stats
+    Outpass.countDocuments({ ...countBase, status: { $in: ['approved', 'exited'] } }),
     Outpass.countDocuments({ ...countBase, status: 'rejected' }),
     Outpass.countDocuments({ ...countBase, status: 'cancelled_by_student' }),
   ]);
@@ -596,6 +599,7 @@ export const getFacultyHistory = asyncHandler(async (req, res) => {
   // 10. format list
   const formatted = outpasses.map(o => ({
     requestId: o._id,
+    // ✅ Keep 'exited' as its own string so the frontend can color it teal
     status: o.status === 'cancelled_by_student' ? 'cancelled' : o.status,
     reasonCategory: o.reasonCategory,
     reason: o.reason,
