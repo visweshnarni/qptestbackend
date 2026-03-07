@@ -26,6 +26,7 @@ import outpassRoutes from './src/routes/outpassRoutes.js';
 import facultyRoutes from './src/routes/facultyRoutes.js';
 
 import hodRoutes from './src/routes/hodRoutes.js';
+import securityRoutes from './src/routes/securityRoutes.js'; // ✅ ADD THIS LINE
 
 // ESM-equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -65,6 +66,7 @@ app.use('/api/hod', hodRoutes);
 app.use("/api/parent-ivr", parentIvrRoutes);
 
 app.use("/api/qr", qrRoutes); // ✅ ADD THIS LINE
+app.use('/api/security', securityRoutes);
 
 
 
